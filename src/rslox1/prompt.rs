@@ -1,7 +1,7 @@
 use std::io;
 use std::io::BufRead;
 
-use crate::rslox1::lexer::{LexResult, run};
+use crate::rslox1::lexer::run;
 
 pub fn run_prompt() -> () {
     let stdin = io::stdin();

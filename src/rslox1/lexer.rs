@@ -1,5 +1,5 @@
 use std::fmt;
-use std::fmt::Formatter;
+use std::fmt::{Display, Formatter};
 
 pub fn run(line: &str) -> LexResult<()> {
     let tokens = tokenize(line)?;
@@ -9,7 +9,7 @@ pub fn run(line: &str) -> LexResult<()> {
     Ok(())
 }
 
-fn tokenize(source: &str) -> LexResult<Vec<Token>> {
+pub fn tokenize(source: &str) -> LexResult<Vec<Token>> {
     Lexer::new(source).get_lexems()
 }
 
@@ -26,6 +26,8 @@ pub enum TokenType {
     LeftBrace,
     RightBrace,
     Comma,
+    Question,
+    Colon,
     Dot,
     Minus,
     Plus,
@@ -59,28 +61,28 @@ pub enum TokenType {
     Var,
     While,
 
-    StringLiteral { literal: String },
-    NumberLiteral { literal: f64 },
-    Identifier { name: String },
+    StringLiteral(String),
+    NumberLiteral(f64),
+    Identifier(String),
 
     Eof,
 }
 
 impl TokenType {
-    fn string_literal(str: &str) -> Self {
-        TokenType::StringLiteral { literal: str.to_owned() }
-    }
-    fn number_literal(f: f64) -> Self {
-        TokenType::NumberLiteral { literal: f }
-    }
-    fn identifier(str: &str) -> Self {
-        TokenType::Identifier { name: str.to_owned() }
+    fn string_literal<S: Into<String>>(str: S) -> Self { TokenType::StringLiteral(str.into()) }
+    fn number_literal(f: f64) -> Self { TokenType::NumberLiteral(f) }
+    fn identifier<S: Into<String>>(str: S) -> Self { TokenType::Identifier(str.into()) }
+}
+
+impl Display for TokenType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_fmt(format_args!("{:?}", self))
     }
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token {
-    line: usize,
+    pub line: usize,
     r#type: TokenType,
 }
 
@@ -88,6 +90,7 @@ impl Token {
     fn new(line: usize, r#type: TokenType) -> Self {
         Token { line, r#type }
     }
+    pub(crate) fn get_type(&self) -> &TokenType { &self.r#type }
 }
 
 #[derive(Debug)]
@@ -106,7 +109,7 @@ impl LexError {
     }
 }
 
-impl fmt::Display for LexError {
+impl Display for LexError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         write!(f, "[line {}] Error{}: {}", self.line, self.r#where, self.message)
     }
@@ -156,11 +159,13 @@ impl<'a> Lexer<'a> {
     fn scan_token(&mut self) -> LexResult<()> {
         let c = self.advance();
         match c {
+            ',' => Ok(self.add_token_type(TokenType::Comma)),
+            '?' => Ok(self.add_token_type(TokenType::Question)),
+            ':' => Ok(self.add_token_type(TokenType::Colon)),
             '(' => Ok(self.add_token_type(TokenType::LeftParen)),
             ')' => Ok(self.add_token_type(TokenType::RightParen)),
             '{' => Ok(self.add_token_type(TokenType::LeftBrace)),
             '}' => Ok(self.add_token_type(TokenType::RightBrace)),
-            ',' => Ok(self.add_token_type(TokenType::Comma)),
             '.' => Ok(self.add_token_type(TokenType::Dot)),
             '-' => Ok(self.add_token_type(TokenType::Minus)),
             '+' => Ok(self.add_token_type(TokenType::Plus)),
@@ -176,11 +181,11 @@ impl<'a> Lexer<'a> {
                 let m = self.matches('=');
                 Ok(self.add_token_type(if m { TokenType::EqualEqual } else { TokenType::Equal }))
             }
-            '>' => {
+            '<' => {
                 let m = self.matches('=');
                 Ok(self.add_token_type(if m { TokenType::LessEqual } else { TokenType::Less }))
             }
-            '<' => {
+            '>' => {
                 let m = self.matches('=');
                 Ok(self.add_token_type(if m { TokenType::GreaterEqual } else { TokenType::Greater }))
             }
@@ -226,16 +231,16 @@ impl<'a> Lexer<'a> {
     }
 
     fn skip_line_comment(&mut self) -> () {
-        while !self.is_at_end() && self.peek() != '\n' {
+        while self.peek_test(negated_char_test('\n')) {
             self.advance();
         }
     }
 
     fn skip_multiline_comment(&mut self) -> LexResult<()> {
-        while self.current < self.source.len() - 1 && (self.peek() != '*' || self.peek_n(1) != '/') {
+        while self.peek_test(negated_char_test('*')) || self.peek_n_test(1, negated_char_test('/')) {
             self.advance();
         }
-        if self.current >= self.source.len() - 1 || self.peek() != '*' || self.peek_n(1) != '/' {
+        if self.peek_test(negated_char_test('*')) || self.peek_n_test(1, negated_char_test('/')) {
             self.error("unterminated multiline comment.")
         } else {
             self.current += 2; // Skip past closing comment
@@ -243,28 +248,23 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn peek(&self) -> char {
-        self.peek_n(0)
+    fn peek_test<F: CharTest>(&self, f: F) -> bool {
+        self.peek_n_test(0, f)
     }
-    fn peek_n(&self, n: usize) -> char {
-        self.source.chars().nth(self.current + n)
-            .expect(format!(
-                "Index {} is out of bounds for source {}",
-                self.current,
-                self.source.len(),
-            ).as_str())
+    fn peek_n_test<F: CharTest>(&self, n: usize, f: F) -> bool {
+        self.source.chars().nth(self.current + n).map(|e| f.char_test(e)).unwrap_or(false)
     }
 
     fn read_number_literal(&mut self) -> TokenType {
-        while self.peek().is_numeric() || self.peek() == '.' {
+        while self.peek_test(|e: char| e.is_numeric() || e == '.') {
             self.advance();
         }
         TokenType::number_literal(self.current_lexeme().parse::<f64>().expect("invalid number."))
     }
 
     fn read_string_literal(&mut self) -> LexResult<TokenType> {
-        while !self.is_at_end() && self.peek() != '"' {
-            if self.peek() == '\n' {
+        while self.peek_test(negated_char_test('"')) {
+            if self.peek_test('\n') {
                 self.line += 1
             }
             self.advance();
@@ -280,7 +280,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_identifier(&mut self) -> TokenType {
-        while self.peek().is_alphanumeric() {
+        while self.peek_test(|e: char| e.is_alphanumeric()) {
             self.advance();
         }
         let word = self.current_lexeme();
@@ -313,39 +313,91 @@ impl<'a> Lexer<'a> {
     }
 }
 
+trait CharTest {
+    fn char_test(&self, c: char) -> bool;
+}
+
+fn negated_char_test(c: char) -> impl CharTest {
+    move |c2| { c2 != c }
+}
+
+impl CharTest for char {
+    fn char_test(&self, c: char) -> bool { self == &c }
+}
+
+impl<F> CharTest for F where F: Fn(char) -> bool {
+    fn char_test(&self, c: char) -> bool { self(c) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    fn test_identifier() {
+        assert_eq!(
+            tokenize("x").expect("tokenize failed"),
+            vec!(Token::new(1, TokenType::identifier("x"))),
+        )
+    }
+
+    #[test]
     fn test_basic_example() {
         assert_eq!(
+            tokenize("var x = \"language\";").expect("tokenize failed"),
             vec!(
                 Token::new(1, TokenType::Var),
-                Token::new(1, TokenType::Identifier { name: "x".to_owned() }),
+                Token::new(1, TokenType::identifier("x")),
                 Token::new(1, TokenType::Equal),
-                Token::new(1, TokenType::StringLiteral { literal: "language".to_owned() }),
+                Token::new(1, TokenType::string_literal("language")),
                 Token::new(1, TokenType::Semicolon),
             ),
-            tokenize("var x = \"language\";").expect("tokenize failed")
+        )
+    }
+
+    #[test]
+    fn test_basic_expression() {
+        assert_eq!(
+            tokenize("x + 42 > \"foo\"").expect("tokenize failed"),
+            vec!(
+                Token::new(1, TokenType::identifier("x")),
+                Token::new(1, TokenType::Plus),
+                Token::new(1, TokenType::NumberLiteral(42.0)),
+                Token::new(1, TokenType::Greater),
+                Token::new(1, TokenType::string_literal("foo")),
+            ),
+        )
+    }
+
+    #[test]
+    fn test_ternary() {
+        assert_eq!(
+            tokenize("a ? b : c").expect("tokenize failed"),
+            vec!(
+                Token::new(1, TokenType::identifier("a")),
+                Token::new(1, TokenType::Question),
+                Token::new(1, TokenType::identifier("b")),
+                Token::new(1, TokenType::Colon),
+                Token::new(1, TokenType::identifier("c")),
+            ),
         )
     }
 
     #[test]
     fn test_comments() {
         assert_eq!(
+            tokenize("42 / 54.13; // Right?\n var xyz /**/ = /*//*/ foobar;").expect("tokenize failed"),
             vec!(
-                Token::new(1, TokenType::NumberLiteral { literal: 42.0 }),
+                Token::new(1, TokenType::NumberLiteral(42.0)),
                 Token::new(1, TokenType::Slash),
-                Token::new(1, TokenType::NumberLiteral { literal: 54.13 }),
+                Token::new(1, TokenType::NumberLiteral(54.13)),
                 Token::new(1, TokenType::Semicolon),
                 Token::new(2, TokenType::Var),
-                Token::new(2, TokenType::Identifier { name: "xyz".to_owned() }),
+                Token::new(2, TokenType::identifier("xyz")),
                 Token::new(2, TokenType::Equal),
-                Token::new(2, TokenType::Identifier { name: "foobar".to_owned() }),
+                Token::new(2, TokenType::identifier("foobar")),
                 Token::new(2, TokenType::Semicolon),
             ),
-            tokenize("42 / 54.13; // Right?\n var xyz /**/ = /*//*/ foobar;").expect("tokenize failed")
         )
     }
 }
