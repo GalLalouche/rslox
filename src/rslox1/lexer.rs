@@ -1,22 +1,17 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-pub fn run(line: &str) -> LexResult<()> {
-    let tokens = tokenize(line)?;
-    for token in tokens {
-        println!("{:?}", token);
-    }
-    Ok(())
-}
+use crate::rslox1::common;
+use crate::rslox1::common::{ErrorInfo, LoxError, LoxResult};
 
-pub fn tokenize(source: &str) -> LexResult<Vec<Token>> {
-    Lexer::new(source).get_lexems()
+pub fn tokenize(source: &str) -> LoxResult<Vec<Token>> {
+    common::convert_error(Lexer::new(source).get_lexems())
 }
 
 
 // Only failure possible during lexing is unterminated string or multi-line comment. Therefore, at
 // most one error can occur at any given time.
-pub type LexResult<A> = Result<A, LexError>;
+type LexResult<A> = Result<A, LexError>;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
@@ -90,7 +85,11 @@ impl Token {
     fn new(line: usize, r#type: TokenType) -> Self {
         Token { line, r#type }
     }
-    pub(crate) fn get_type(&self) -> &TokenType { &self.r#type }
+    pub fn get_type(&self) -> &TokenType { &self.r#type }
+
+    pub fn error_info(&self) -> ErrorInfo {
+        ErrorInfo { line: self.line }
+    }
 }
 
 #[derive(Debug)]
@@ -98,6 +97,16 @@ pub struct LexError {
     line: usize,
     r#where: String,
     message: String,
+}
+
+impl LoxError for LexError {
+    fn get_info(&self) -> ErrorInfo {
+        ErrorInfo { line: self.line }
+    }
+
+    fn get_message(&self) -> String {
+        self.message.to_owned()
+    }
 }
 
 impl LexError {

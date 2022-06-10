@@ -1,30 +1,46 @@
+use crate::rslox1::lexer::{Token, TokenType};
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Program {
+    pub statements: Vec<Statement>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Statement {
+    Variable(String, Expression),
+    Expression(Expression),
+    Print(Expression),
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
-    Identifier(String),
-    Literal(Literal),
     Grouping(Box<Expression>),
+    // Assign(TokenType, Box<Expression>),
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Ternary(Box<Expression>, Box<Expression>, Box<Expression>),
+    // Variable(TokenType),
+    Atomic(Atom),
 }
 
 impl Expression {
-    pub fn identifier<S: Into<String>>(str: S) -> Self { Expression::Identifier(str.into()) }
     pub fn pretty_print(&self) -> String {
         fn aux(e: &Expression, depth: usize) -> String {
             let indent = |s: &str| -> String {
                 format!("{}{}", "\t".repeat(depth), s.to_owned())
             };
             match e {
-                Expression::Identifier(name) => indent(name),
-                Expression::Literal(lit) => match lit {
-                    Literal::Number(n) => indent(n.to_string().as_ref()),
-                    Literal::String(s) => indent(format!("\"{}\"", s).as_ref()),
-                    Literal::True => indent("true"),
-                    Literal::False => indent("false"),
-                    Literal::Nil => indent("nil"),
+                Expression::Atomic(lit) => match lit {
+                    Atom::Identifier(name) => indent(name),
+                    Atom::Number(n) => indent(n.to_string().as_ref()),
+                    Atom::String(s) => indent(format!("\"{}\"", s).as_ref()),
+                    Atom::True => indent("true"),
+                    Atom::False => indent("false"),
+                    Atom::Nil => indent("nil"),
                 }
                 Expression::Grouping(e) => indent(format!("(\n{})", aux(e, depth + 1)).as_ref()),
+                // Expression::Assign(t, e) =>
+                //     indent(format!("{:?} := (\n{})", t, aux(e, depth + 1)).as_ref()),
                 Expression::Unary(op, e) =>
                     indent(format!("{}(\n{})", op.symbol(), aux(e, depth + 1)).as_ref()),
                 Expression::Binary(op, e1, e2) =>
@@ -48,12 +64,18 @@ impl Expression {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Literal {
+pub enum Atom {
+    Identifier(String),
     Number(f64),
     String(String),
     True,
     False,
     Nil,
+}
+
+impl Atom {
+    pub fn identifier<S: Into<String>>(str: S) -> Self { Atom::Identifier(str.into()) }
+    pub fn string<S: Into<String>>(str: S) -> Self { Atom::String(str.into()) }
 }
 
 #[derive(Debug, PartialEq, Clone, Copy, Eq)]
@@ -81,7 +103,6 @@ pub enum BinaryOperator {
     Mult,
 
     BangEqual,
-    Equal,
     EqualEqual,
     Greater,
     GreaterEqual,
@@ -101,7 +122,6 @@ impl BinaryOperator {
             BinaryOperator::Div => "/",
             BinaryOperator::Mult => "*",
             BinaryOperator::BangEqual => "!=",
-            BinaryOperator::Equal => "=",
             BinaryOperator::EqualEqual => "==",
             BinaryOperator::Greater => ">",
             BinaryOperator::GreaterEqual => ">=",
