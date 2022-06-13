@@ -1,5 +1,3 @@
-use crate::rslox1::lexer::{Token, TokenType};
-
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
     pub statements: Vec<Statement>,
@@ -15,11 +13,10 @@ pub enum Statement {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Grouping(Box<Expression>),
-    // Assign(TokenType, Box<Expression>),
+    Assign(String, Box<Expression>),
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Ternary(Box<Expression>, Box<Expression>, Box<Expression>),
-    // Variable(TokenType),
     Atomic(Atom),
 }
 
@@ -39,8 +36,8 @@ impl Expression {
                     Atom::Nil => indent("nil"),
                 }
                 Expression::Grouping(e) => indent(format!("(\n{})", aux(e, depth + 1)).as_ref()),
-                // Expression::Assign(t, e) =>
-                //     indent(format!("{:?} := (\n{})", t, aux(e, depth + 1)).as_ref()),
+                Expression::Assign(t, e) =>
+                    indent(format!("{:?} := (\n{})", t, aux(e, depth + 1)).as_ref()),
                 Expression::Unary(op, e) =>
                     indent(format!("{}(\n{})", op.symbol(), aux(e, depth + 1)).as_ref()),
                 Expression::Binary(op, e1, e2) =>

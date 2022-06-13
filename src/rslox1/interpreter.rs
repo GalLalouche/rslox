@@ -1,11 +1,10 @@
-use std::{fmt, io};
 use std::collections::HashMap;
+use std::io;
 use std::io::Write;
-use nonempty::NonEmpty;
 
 use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
-use crate::rslox1::common::{convert_error, convert_errors, ErrorInfo, LoxError, LoxResult};
+use crate::rslox1::common::{convert_error, ErrorInfo, LoxError, LoxResult};
 use crate::rslox1::interpreter::InterpreterError::{NilReference, TypeError, UnrecognizedIdentifier};
 use crate::rslox1::interpreter::LoxValue::{Bool, Nil, Number};
 
@@ -60,28 +59,45 @@ pub fn interpret(program: &AnnotatedProgram) -> LoxResult<()> {
     convert_error(interpret_go(&program, &mut io::stdout()))
 }
 
+struct Environment {
+    values: HashMap<String, LoxValue>,
+}
+
+impl Environment {
+    pub fn new() -> Self { Environment { values: HashMap::new() } }
+    pub fn get(&self, key: &str) -> Option<&LoxValue> {
+        self.values.get(key)
+    }
+    pub fn define(&mut self, key: String, value: LoxValue) -> Option<LoxValue> {
+        self.values.insert(key, value)
+    }
+    pub fn is_defined(&self, key: &str) -> bool {
+        self.values.contains_key(key)
+    }
+}
+
 fn interpret_go(program: &AnnotatedProgram, writer: &mut impl Write) -> InterpretResult<()> {
-    let mut symbols: HashMap<String, LoxValue> = HashMap::new();
+    let mut environment = Environment::new();
     for statement in &program.statements {
-        interpret_statement(&mut symbols, &statement, writer)?;
+        interpret_statement(&mut environment, &statement, writer)?;
     }
     Ok(())
 }
 
 fn interpret_statement(
-    symbols: &mut HashMap<String, LoxValue>,
+    environment: &mut Environment,
     statement: &AnnotatedStatement,
     writer: &mut impl Write,
 ) -> InterpretResult<()> {
     match statement {
         AnnotatedStatement::Variable(name, e, _) => {
-            let expr = interpret_expr(symbols, e)?;
-            symbols.insert(name.to_owned(), expr);
+            let expr = interpret_expr(environment, e)?;
+            environment.define(name.to_owned(), expr);
             Ok(())
         }
-        AnnotatedStatement::Expression(e) => interpret_expr(symbols, e).map(|_| ()),
+        AnnotatedStatement::Expression(e) => interpret_expr(environment, e).map(|_| ()),
         AnnotatedStatement::Print(e, _) => {
-            let expr = interpret_expr(symbols, e)?;
+            let expr = interpret_expr(environment, e)?;
             write!(writer, "{}", match expr {
                 Number(n) => n.to_string(),
                 LoxValue::String(s) => s,
@@ -97,13 +113,13 @@ fn interpret_statement(
 // * Screw truthiness. Only Bools are truthy.
 // * String comparisons using >, <, >=, <=.
 fn interpret_expr(
-    symbols: &mut HashMap<String, LoxValue>,
+    environment: &mut Environment,
     expression: &AnnotatedExpression,
 ) -> InterpretResult<LoxValue> {
     match expression {
         AnnotatedExpression::Atomic(l, i) => match l {
             Atom::Identifier(name) =>
-                symbols
+                environment
                     .get(name)
                     .cloned()
                     .ok_or(UnrecognizedIdentifier(name.to_owned(), *i)),
@@ -113,10 +129,19 @@ fn interpret_expr(
             Atom::False => Ok(Bool(false)),
             Atom::Nil => Ok(Nil),
         },
-        AnnotatedExpression::Grouping(e, _) => interpret_expr(symbols, e),
+        AnnotatedExpression::Grouping(e, _) => interpret_expr(environment, e),
+        AnnotatedExpression::Assign(name, expr, i) => {
+            let value = interpret_expr(environment, expr)?;
+            if environment.is_defined(name) {
+                environment.define(name.to_owned(), value.to_owned());
+                Ok(value)
+            } else {
+                Err(UnrecognizedIdentifier(name.to_owned(), i.to_owned()))
+            }
+        }
         AnnotatedExpression::Unary(op, e, i) => match op {
             UnaryOperator::Minus => {
-                let x = interpret_expr(symbols, e)?;
+                let x = interpret_expr(environment, e)?;
                 match x {
                     Nil => Err(NilReference(*i)),
                     Number(n) => Ok(Number(n)),
@@ -124,7 +149,7 @@ fn interpret_expr(
                 }
             }
             UnaryOperator::Bang => {
-                let x = interpret_expr(symbols, e)?;
+                let x = interpret_expr(environment, e)?;
                 match x {
                     Nil => Err(NilReference(*i)),
                     Bool(b) => Ok(Bool(!b)),
@@ -133,8 +158,8 @@ fn interpret_expr(
             }
         }
         AnnotatedExpression::Binary(op, e1, e2, i) => {
-            let x1 = interpret_expr(symbols, e1)?;
-            let x2 = interpret_expr(symbols, e2)?;
+            let x1 = interpret_expr(environment, e1)?;
+            let x2 = interpret_expr(environment, e2)?;
             match op {
                 BinaryOperator::Comma => Ok(x2),
                 BinaryOperator::Minus => match (&x1, &x2) {
@@ -156,11 +181,11 @@ fn interpret_expr(
                     _ => binary_type_error(op, &x1, &x2, i),
                 }
 
-                BinaryOperator::BangEqual => equalequal(&x1, &x2).map(|e| match e {
+                BinaryOperator::BangEqual => equal_equal(&x1, &x2).map(|e| match e {
                     Bool(b) => Bool(!b),
-                    _ => panic!("equalequal should always return a bool"),
+                    _ => panic!("equal_equal should always return a bool"),
                 }),
-                BinaryOperator::EqualEqual => equalequal(&x1, &x2),
+                BinaryOperator::EqualEqual => equal_equal(&x1, &x2),
                 BinaryOperator::Greater
                 | BinaryOperator::GreaterEqual
                 | BinaryOperator::Less
@@ -182,10 +207,11 @@ fn interpret_expr(
             }
         }
         AnnotatedExpression::Ternary(cond, e1, e2, i) => {
-            let i_cond = interpret_expr(symbols, cond)?;
+            let i_cond = interpret_expr(environment, cond)?;
             match i_cond {
                 Nil => Err(NilReference(*i)),
-                Bool(b) => if b { interpret_expr(symbols, e1) } else { interpret_expr(symbols, e2) }
+                Bool(b) =>
+                    if b { interpret_expr(environment, e1) } else { interpret_expr(environment, e2) },
                 _ => Err(TypeError(
                     format!("Cannot apply ternary operator to non-Bool cond '{:?}'", i_cond), *i)),
             }
@@ -230,7 +256,7 @@ fn binary_type_error<A>(
         format!("Cannot apply operator '{:?}' to '{:?}' and '{:?}'", op, v1, v2), *error_info))
 }
 
-fn equalequal(v1: &LoxValue, v2: &LoxValue) -> InterpretResult<LoxValue> {
+fn equal_equal(v1: &LoxValue, v2: &LoxValue) -> InterpretResult<LoxValue> {
     match (v1, v2) {
         (Number(n1), Number(n2)) => Ok(Bool(n1.eq(&n2))),
         (LoxValue::String(s1), LoxValue::String(s2)) => Ok(Bool(s1 == s2)),
@@ -257,5 +283,25 @@ mod tests {
 
         let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
         assert_eq!(string, "6");
+    }
+
+    #[test]
+    fn printing_assignments() {
+        let ast = parse(&tokenize("var x;\nprint x = 2;").unwrap()).unwrap();
+        let mut buff = Cursor::new(Vec::new());
+        interpret_go(&ast, &mut buff).unwrap();
+
+        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
+        assert_eq!(string, "2");
+    }
+
+    #[test]
+    fn invalid_reference() {
+        let ast = parse(&tokenize("print a;\nvar a = 5;").unwrap()).unwrap();
+        let mut buff = Cursor::new(Vec::new());
+        assert_eq!(
+            interpret_go(&ast, &mut buff).unwrap_err().get_info().line,
+            1,
+        )
     }
 }

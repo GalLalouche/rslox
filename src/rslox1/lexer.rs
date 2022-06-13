@@ -66,7 +66,7 @@ pub enum TokenType {
 impl TokenType {
     fn string_literal<S: Into<String>>(str: S) -> Self { TokenType::StringLiteral(str.into()) }
     fn number_literal(f: f64) -> Self { TokenType::NumberLiteral(f) }
-    fn identifier<S: Into<String>>(str: S) -> Self { TokenType::Identifier(str.into()) }
+    pub fn identifier<S: Into<String>>(str: S) -> Self { TokenType::Identifier(str.into()) }
 }
 
 impl Display for TokenType {
@@ -82,7 +82,7 @@ pub struct Token {
 }
 
 impl Token {
-    fn new(line: usize, r#type: TokenType) -> Self {
+    pub fn new(line: usize, r#type: TokenType) -> Self {
         Token { line, r#type }
     }
     pub fn get_type(&self) -> &TokenType { &self.r#type }

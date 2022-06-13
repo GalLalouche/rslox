@@ -8,7 +8,7 @@ pub struct AnnotatedProgram {
 
 impl From<&AnnotatedProgram> for Program {
     fn from(ae: &AnnotatedProgram) -> Self {
-        Program {statements: ae.statements.iter().map(|e| e.into()).collect() }
+        Program { statements: ae.statements.iter().map(|e| e.into()).collect() }
     }
 }
 
@@ -33,6 +33,7 @@ impl From<&AnnotatedStatement> for Statement {
 pub enum AnnotatedExpression {
     Atomic(Atom, ErrorInfo),
     Grouping(Box<AnnotatedExpression>, ErrorInfo),
+    Assign(String, Box<AnnotatedExpression>, ErrorInfo),
     Unary(UnaryOperator, Box<AnnotatedExpression>, ErrorInfo),
     Binary(BinaryOperator, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
     Ternary(Box<AnnotatedExpression>, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
@@ -44,6 +45,8 @@ impl From<&AnnotatedExpression> for Expression {
             AnnotatedExpression::Atomic(e, _) => Expression::Atomic(e.to_owned()),
             AnnotatedExpression::Grouping(e, _) =>
                 Expression::Grouping(Box::new(e.as_ref().into())),
+            AnnotatedExpression::Assign(n, e, _) =>
+                Expression::Assign(n.to_owned(), Box::new(e.as_ref().into())),
             AnnotatedExpression::Unary(op, e, _) =>
                 Expression::Unary(*op, Box::new(e.as_ref().into())),
             AnnotatedExpression::Binary(op, e1, e2, _) =>

@@ -1,6 +1,9 @@
+use std::string::ParseError;
+
 use nonempty::NonEmpty;
 
 use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox1::annotated_ast::AnnotatedExpression::{Assign, Atomic};
 use crate::rslox1::annotated_ast::AnnotatedStatement::Variable;
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
 use crate::rslox1::common;
@@ -59,22 +62,21 @@ impl<'a> Parser<'a> {
     }
 
     fn declaration(&mut self) -> Result<AnnotatedStatement, ParserError> {
-        self.matches(|e| match e {
-            TokenType::Var => Some(()),
-            _ => None,
-        }).map(|(_, i)| {
-            let token = self.advance();
-            let name = match token.get_type() {
-                TokenType::Identifier(name) => Ok(name.to_owned()),
-                _ => Err(ParserError {
-                    message: format!("Expected identifier, got {:?}", token),
-                    token: token.to_owned(),
-                })
-            }?;
-            self.consume(TokenType::Equal, None)?;
-            let expr = self.expression()?;
-            Ok(Variable(name, expr, i))
-        }).unwrap_or_else(|| {
+        self.matches_single(TokenType::Var)
+            .map(|i| {
+                let token = self.advance();
+                let name = match token.get_type() {
+                    TokenType::Identifier(name) => Ok(name.to_owned()),
+                    _ => Err(ParserError {
+                        message: format!("Expected identifier, got {:?}", token),
+                        token: token.to_owned(),
+                    })
+                }?;
+                let expr = self.matches_single(TokenType::Equal)
+                    .map(|_| self.expression())
+                    .unwrap_or(Ok(Atomic(Atom::Nil, i)))?;
+                Ok(Variable(name, expr, i))
+            }).unwrap_or_else(|| {
             self.statement()
         }).and_then(|e| {
             self.consume(TokenType::Semicolon, None)?;
@@ -83,12 +85,10 @@ impl<'a> Parser<'a> {
     }
 
     fn statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
-        self.matches(|e| match e {
-            TokenType::Print => Some(()),
-            _ => None,
-        }).map(|(_, i)| {
-            self.expression().map(|e| AnnotatedStatement::Print(e, i))
-        }).unwrap_or_else(|| {
+        self.matches_single(TokenType::Print)
+            .map(|i| {
+                self.expression().map(|e| AnnotatedStatement::Print(e, i))
+            }).unwrap_or_else(|| {
             self.expression().map(|e| AnnotatedStatement::Expression(e))
         })
     }
@@ -108,14 +108,23 @@ impl<'a> Parser<'a> {
     }
 
     fn assignment(&mut self) -> Result<AnnotatedExpression, ParserError> {
-        self.equality()
-        // let expr = self.equality()?;
-        // self.matches(|e| match e {
-        //     case TokenType::Equal => Some(())
-        // }).map(|(_, i)| {
-        //     let value = self.assignment()?;
-        //     if (jkk)
-        // }).unwrap_or(Ok(expr))
+        let expr = self.equality()?;
+        let next = self.peek().clone();
+        match next.get_type() {
+            TokenType::Equal => {
+                self.consume(TokenType::Equal, None).unwrap();
+                let value = self.assignment()?;
+                match &expr {
+                    Atomic(Atom::Identifier(name), _) => Ok(
+                        Assign(name.clone(), Box::new(value), next.error_info())),
+                    e => Err(ParserError {
+                        message: format!("Invalid assignment r-value {:?}", e),
+                        token: next,
+                    })
+                }
+            }
+            _ => Ok(expr)
+        }
     }
 
     fn ternary(&mut self) -> Result<AnnotatedExpression, ParserError> {
@@ -210,7 +219,7 @@ impl<'a> Parser<'a> {
             TokenType::Identifier(name) => Some(Atom::identifier(name)),
             _ => None,
         })
-            .map(|(l, i)| AnnotatedExpression::Atomic(l, i))
+            .map(|(l, i)| Atomic(l, i))
             .map(|e| Ok(e))
             .unwrap_or_else(|| {
                 self.consume(TokenType::LeftParen, Some("Expression".to_owned()))?;
@@ -239,6 +248,14 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(expr)
+    }
+
+    fn matches_single(&mut self, expected: TokenType) -> Option<ErrorInfo> {
+        if !self.is_at_end() && self.peek().get_type() == &expected {
+            Some(self.consume(expected, None).unwrap())
+        } else {
+            None
+        }
     }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<ErrorInfo, ParserError> {
@@ -451,18 +468,6 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn assignment() {
-    //     let expr = parse_expression("x = 42;");
-    //     let expected =
-    //         Binary(
-    //             BinaryOperator::Equal,
-    //             Box::new(Atomic(Atom::identifier("x"))),
-    //             Box::new(Atomic(Number(42.0))),
-    //         );
-    //     assert_eq!(expr, expected);
-    // }
-    //
     #[test]
     fn print_statement() {
         let expr = parse_single_statement("print x1 <= x2;");
@@ -490,20 +495,40 @@ mod tests {
         assert_eq!(expr, expected);
     }
 
-    //
-    // #[test]
-    // fn variable_assignment() {
-    //     let prog = parse_program("var x = 1; x = \"foo\";");
-    //     let expected =
-    //         vec![
-    //             Statement::Variable("x".to_owned(), Atomic(Number(1.0))),
-    //             Statement::Expression(
-    //                 Binary(
-    //                     BinaryOperator::Equal,
-    //                     Box::new(Atomic(Atom::identifier("x"))),
-    //                     Box::new(Atomic(Atom::string("foo"))),
-    //                 )),
-    //         ];
-    //     assert_eq!(prog, expected);
-    // }
+    #[test]
+    fn nil_variable_statement() {
+        let expr = parse_single_statement("var z;");
+        let expected = Statement::Variable(
+            "z".to_owned(),
+            Atomic(Atom::Nil),
+        );
+        assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn variable_assignment() {
+        let prog = parse_program("var x = 1;\n x = \"foo\";");
+        let expected =
+            vec![
+                Statement::Variable("x".to_owned(), Atomic(Number(1.0))),
+                Statement::Expression(
+                    Expression::Assign(
+                        "x".to_owned(),
+                        Box::new(Atomic(Atom::string("foo"))),
+                    ),
+                ),
+            ];
+        assert_eq!(prog, expected);
+    }
+
+    #[test]
+    fn assignment() {
+        let expr = parse_expression("x = 42;");
+        let expected =
+            Expression::Assign(
+                "x".to_owned(),
+                Box::new(Atomic(Number(42.0))),
+            );
+        assert_eq!(expr, expected);
+    }
 }
