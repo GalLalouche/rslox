@@ -1,10 +1,8 @@
-use std::string::ParseError;
-
 use nonempty::NonEmpty;
 
 use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox1::annotated_ast::AnnotatedExpression::{Assign, Atomic};
-use crate::rslox1::annotated_ast::AnnotatedStatement::Variable;
+use crate::rslox1::annotated_ast::AnnotatedStatement::{Block, Variable};
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
 use crate::rslox1::common;
 use crate::rslox1::common::{ErrorInfo, LoxError, LoxResult};
@@ -48,7 +46,7 @@ impl<'a> Parser<'a> {
     fn program(&mut self) -> ParserResult<AnnotatedProgram> {
         let mut statements = Vec::new();
         while !self.is_at_end() {
-            match self.declaration() {
+            match self.block() {
                 Ok(s) => statements.push(s),
                 Err(e) => {
                     self.errors.push(e);
@@ -61,6 +59,17 @@ impl<'a> Parser<'a> {
             .unwrap_or(Ok(AnnotatedProgram { statements }))
     }
 
+    fn block(&mut self) -> Result<AnnotatedStatement, ParserError> {
+        self.matches_single(TokenType::LeftBrace)
+            .map(|i| {
+                let mut statements = Vec::new();
+                while !self.is_at_end() && self.peek().get_type() != &TokenType::RightBrace {
+                    self.block().map(|e| statements.push(e))?;
+                }
+                self.consume(TokenType::RightBrace, None).unwrap();
+                Ok(Block(statements, i))
+            }).unwrap_or_else(|| self.declaration())
+    }
     fn declaration(&mut self) -> Result<AnnotatedStatement, ParserError> {
         self.matches_single(TokenType::Var)
             .map(|i| {
@@ -397,6 +406,24 @@ mod tests {
                 Box::new(Atomic(Number(3.0))),
             );
         assert_eq!(expr, expected);
+     }
+
+    #[test]
+    fn string_concat() {
+        let expr = parse_expression("1 + \"2\" + 3;");
+        let expected =
+            Binary(
+                BinaryOperator::Plus,
+                Box::new(
+                    Binary(
+                        BinaryOperator::Plus,
+                        Box::new(Atomic(Number(1.0))),
+                        Box::new(Atomic(Atom::string("2"))),
+                    )
+                ),
+                Box::new(Atomic(Number(3.0))),
+            );
+        assert_eq!(expr, expected);
     }
 
     #[test]
@@ -470,7 +497,7 @@ mod tests {
 
     #[test]
     fn print_statement() {
-        let expr = parse_single_statement("print x1 <= x2;");
+        let stmt = parse_single_statement("print x1 <= x2;");
         let expected = Statement::Print(
             Binary(
                 BinaryOperator::LessEqual,
@@ -478,31 +505,31 @@ mod tests {
                 Box::new(Atomic(Atom::identifier("x2"))),
             )
         );
-        assert_eq!(expr, expected);
+        assert_eq!(stmt, expected);
     }
 
     #[test]
     fn variable_statement() {
-        let expr = parse_single_statement("var z = x1 >= x2;");
-        let expected = Statement::Variable(
-            "z".to_owned(),
+        let stmt = parse_single_statement("var z = x1 >= x2;");
+        let expected = Statement::variable(
+            "z",
             Binary(
                 BinaryOperator::GreaterEqual,
                 Box::new(Atomic(Atom::identifier("x1"))),
                 Box::new(Atomic(Atom::identifier("x2"))),
             ),
         );
-        assert_eq!(expr, expected);
+        assert_eq!(stmt, expected);
     }
 
     #[test]
     fn nil_variable_statement() {
-        let expr = parse_single_statement("var z;");
-        let expected = Statement::Variable(
-            "z".to_owned(),
+        let stmt = parse_single_statement("var z;");
+        let expected = Statement::variable(
+            "z",
             Atomic(Atom::Nil),
         );
-        assert_eq!(expr, expected);
+        assert_eq!(stmt, expected);
     }
 
     #[test]
@@ -510,7 +537,7 @@ mod tests {
         let prog = parse_program("var x = 1;\n x = \"foo\";");
         let expected =
             vec![
-                Statement::Variable("x".to_owned(), Atomic(Number(1.0))),
+                Statement::variable("x", Atomic(Number(1.0))),
                 Statement::Expression(
                     Expression::Assign(
                         "x".to_owned(),
@@ -530,5 +557,15 @@ mod tests {
                 Box::new(Atomic(Number(42.0))),
             );
         assert_eq!(expr, expected);
+    }
+
+    #[test]
+    fn block() {
+        let statement = parse_single_statement("{\nvar z;\nvar x;\n}");
+        let expected = Statement::Block(vec![
+            Statement::variable("z", Atomic(Atom::Nil)),
+            Statement::variable("x", Atomic(Atom::Nil)),
+        ]);
+        assert_eq!(statement, expected);
     }
 }

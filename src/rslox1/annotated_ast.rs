@@ -14,6 +14,7 @@ impl From<&AnnotatedProgram> for Program {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum AnnotatedStatement {
+    Block(Vec<AnnotatedStatement>, ErrorInfo),
     Variable(String, AnnotatedExpression, ErrorInfo),
     Expression(AnnotatedExpression),
     Print(AnnotatedExpression, ErrorInfo),
@@ -22,7 +23,9 @@ pub enum AnnotatedStatement {
 impl From<&AnnotatedStatement> for Statement {
     fn from(ae: &AnnotatedStatement) -> Self {
         match ae {
-            AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.to_owned(), e.into()),
+            AnnotatedStatement::Block(ss, _) =>
+                Statement::Block(ss.into_iter().map(|e| e.into()).collect()),
+            AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.clone(), e.into()),
             AnnotatedStatement::Expression(e) => Statement::Expression(e.into()),
             AnnotatedStatement::Print(p, _) => Statement::Print(p.into()),
         }

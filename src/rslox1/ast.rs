@@ -5,9 +5,16 @@ pub struct Program {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
+    Block(Vec<Statement>),
     Variable(String, Expression),
     Expression(Expression),
     Print(Expression),
+}
+
+impl Statement {
+    pub fn variable<S: Into<String>>(str: S, expr: Expression) -> Self {
+        Statement::Variable(str.into(), expr)
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]

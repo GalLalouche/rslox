@@ -1,5 +1,5 @@
+use std::{io, mem};
 use std::collections::HashMap;
-use std::io;
 use std::io::Write;
 
 use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
@@ -24,6 +24,15 @@ impl LoxValue {
             LoxValue::String(_) => "String",
             Bool(_) => "Bool",
             Nil => "Nil",
+        }
+    }
+
+    pub fn stringify(&self) -> String {
+        match self {
+            Number(n) => n.to_string(),
+            LoxValue::String(s) => s.replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\"),
+            Bool(b) => b.to_string(),
+            Nil => "nil".to_string(),
         }
     }
 }
@@ -60,19 +69,41 @@ pub fn interpret(program: &AnnotatedProgram) -> LoxResult<()> {
 }
 
 struct Environment {
+    parent: Option<Box<Environment>>,
     values: HashMap<String, LoxValue>,
 }
 
 impl Environment {
-    pub fn new() -> Self { Environment { values: HashMap::new() } }
+    pub fn new() -> Self { Environment { parent: None, values: HashMap::new() } }
+    fn nest(&mut self) {
+        let parent = Some(Box::new(Environment {
+            parent: mem::take(&mut self.parent),
+            values: mem::take(&mut self.values),
+        }));
+        self.parent = parent
+    }
+    fn unnest(&mut self) {
+        match self.parent.as_deref_mut() {
+            None => panic!("Cannot unnest if parent doesn't exist"),
+            Some(p) => {
+                self.values = mem::take(&mut p.values);
+                self.parent = mem::take(&mut p.parent);
+            }
+        }
+    }
     pub fn get(&self, key: &str) -> Option<&LoxValue> {
-        self.values.get(key)
+        self.values.get(key).or_else(|| self.parent.as_deref().and_then(|p| p.get(key)))
     }
-    pub fn define(&mut self, key: String, value: LoxValue) -> Option<LoxValue> {
-        self.values.insert(key, value)
+    pub fn define(&mut self, key: String, value: LoxValue) {
+        self.values.insert(key, value);
     }
-    pub fn is_defined(&self, key: &str) -> bool {
-        self.values.contains_key(key)
+    pub fn assign(&mut self, key: String, value: LoxValue) -> bool {
+        if self.values.contains_key(&key) {
+            self.values.insert(key, value);
+            true
+        } else {
+            self.parent.as_deref_mut().map(|p| p.assign(key, value)).unwrap_or(false)
+        }
     }
 }
 
@@ -95,15 +126,18 @@ fn interpret_statement(
             environment.define(name.to_owned(), expr);
             Ok(())
         }
+        AnnotatedStatement::Block(ss, _) => {
+            environment.nest();
+            for s in ss {
+                interpret_statement(environment, s, writer)?;
+            }
+            environment.unnest();
+            Ok(())
+        }
         AnnotatedStatement::Expression(e) => interpret_expr(environment, e).map(|_| ()),
         AnnotatedStatement::Print(e, _) => {
             let expr = interpret_expr(environment, e)?;
-            write!(writer, "{}", match expr {
-                Number(n) => n.to_string(),
-                LoxValue::String(s) => s,
-                Bool(b) => b.to_string(),
-                Nil => "nil".to_string(),
-            }).expect("Not written");
+            write!(writer, "{}", expr.stringify()).expect("Not written");
             Ok(())
         }
     }
@@ -132,8 +166,7 @@ fn interpret_expr(
         AnnotatedExpression::Grouping(e, _) => interpret_expr(environment, e),
         AnnotatedExpression::Assign(name, expr, i) => {
             let value = interpret_expr(environment, expr)?;
-            if environment.is_defined(name) {
-                environment.define(name.to_owned(), value.to_owned());
+            if environment.assign(name.to_owned(), value.to_owned()) {
                 Ok(value)
             } else {
                 Err(UnrecognizedIdentifier(name.to_owned(), i.to_owned()))
@@ -168,8 +201,10 @@ fn interpret_expr(
                 }
                 BinaryOperator::Plus => match (&x1, &x2) {
                     (Number(n1), Number(n2)) => Ok(Number(n1 + n2)),
-                    (LoxValue::String(s1), LoxValue::String(s2)) =>
-                        Ok(LoxValue::String(format!("{}{}", s1, s2))),
+                    (LoxValue::String(s1), e2) =>
+                        Ok(LoxValue::String(format!("{}{}", s1, e2.stringify()))),
+                    (e1, LoxValue::String(s2)) =>
+                        Ok(LoxValue::String(format!("{}{}", e1.stringify(), s2))),
                     _ => binary_type_error(op, &x1, &x2, i),
                 }
                 BinaryOperator::Mult => match (&x1, &x2) {
@@ -303,5 +338,23 @@ mod tests {
             interpret_go(&ast, &mut buff).unwrap_err().get_info().line,
             1,
         )
+    }
+
+    #[test]
+    fn string_concat() {
+        let ast = parse(&tokenize("var x = 1;\nvar y = \"2\"; var z =3;\nprint x + y + z + \"\\n\" + 4 + \"hi\";").unwrap()).unwrap();
+        let mut buff = Cursor::new(Vec::new());
+        interpret_go(&ast, &mut buff).unwrap();
+        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
+        assert_eq!(string, "123\n4hi")
+    }
+
+    #[test]
+    fn blocks() {
+        let ast = parse(&tokenize("var x = 1;\nvar y = 2; var z;\n{var y = 3;\nz = x + y;\n}\nprint x + y + z;").unwrap()).unwrap();
+        let mut buff = Cursor::new(Vec::new());
+        interpret_go(&ast, &mut buff).unwrap();
+        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
+        assert_eq!(string, "7")
     }
 }
