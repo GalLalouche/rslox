@@ -149,7 +149,7 @@ impl<'a> Parser<'a> {
     }
 
     fn assignment(&mut self) -> Result<AnnotatedExpression, ParserError> {
-        let expr = self.equality()?;
+        let expr = self.logical_or()?;
         if self.is_at_end() {
             return Err(ParserError::new(
                 "Unexpected EOF",
@@ -193,6 +193,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn logical_or(&mut self) -> Result<AnnotatedExpression, ParserError> {
+        self.binary(
+            |e| match e {
+                TokenType::Or => Some(BinaryOperator::Or),
+                _ => None,
+            },
+            |e| e.logical_and(),
+        )
+    }
+
+    fn logical_and(&mut self) -> Result<AnnotatedExpression, ParserError> {
+        self.binary(
+            |e| match e {
+                TokenType::And => Some(BinaryOperator::And),
+                _ => None,
+            },
+            |e| e.equality(),
+        )
+    }
 
     fn equality(&mut self) -> Result<AnnotatedExpression, ParserError> {
         self.binary(
@@ -654,5 +673,22 @@ mod tests {
             )),
         };
         assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn logical_operators_precedence() {
+        let expr = parse_expression("a or b and c;");
+        let expected = Binary(
+            BinaryOperator::Or,
+            Box::new(Atomic(Atom::identifier("a"))),
+            Box::new(
+                Binary(
+                    BinaryOperator::And,
+                    Box::new(Atomic(Atom::identifier("b"))),
+                    Box::new(Atomic(Atom::identifier("c"))),
+                ),
+            ),
+        );
+        assert_eq!(expr, expected)
     }
 }

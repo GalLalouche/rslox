@@ -35,6 +35,15 @@ impl LoxValue {
             Nil => "nil".to_string(),
         }
     }
+
+    pub fn truthiness(&self) -> bool {
+        match self {
+            Number(n) => *n != 0.0,
+            LoxValue::String(s) => !s.is_empty(),
+            Bool(b) => *b,
+            Nil => false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -132,18 +141,7 @@ fn interpret_statement(
         }
         AnnotatedStatement::IfElse { cond, if_stmt, else_stmt, .. } => {
             let cond_value = interpret_expr(environment, cond)?;
-            let cond_bool_value = match cond_value {
-                Bool(b) => Ok(b),
-                _ => Err(TypeError(
-                    format!(
-                        "Condition '{:?}' wasn't a Boolean, but '{}'",
-                        cond,
-                        cond_value.stringify(),
-                    ),
-                    cond.error_info(),
-                )),
-            }?;
-            if cond_bool_value {
+            if cond_value.truthiness() {
                 interpret_statement(environment, if_stmt, writer)
             } else if let Some(s) = else_stmt {
                 interpret_statement(environment, s, writer)
@@ -170,7 +168,7 @@ fn interpret_statement(
 }
 
 // Changes from lox:
-// * Screw truthiness. Only Bools are truthy.
+// * Screw truthiness. Only Bools are truthy. But not for OR and AND, so this is probably a bug :\
 // * String comparisons using >, <, >=, <=.
 fn interpret_expr(
     environment: &mut Environment,
@@ -208,15 +206,30 @@ fn interpret_expr(
                 }
             }
             UnaryOperator::Bang => {
-                let x = interpret_expr(environment, e)?;
-                match x {
-                    Nil => Err(NilReference(*i)),
-                    Bool(b) => Ok(Bool(!b)),
-                    e => unary_type_error(op, &e, i),
-                }
+                interpret_expr(environment, e).map(|e| Bool(!e.truthiness()))
             }
         }
         AnnotatedExpression::Binary(op, e1, e2, i) => {
+            match op {
+                BinaryOperator::And => {
+                    let x1 = interpret_expr(environment, e1)?;
+                    return if !x1.truthiness() {
+                        Ok(x1)
+                    } else {
+                        interpret_expr(environment, e2)
+                    };
+                }
+                // TODO lazy circuit
+                BinaryOperator::Or => {
+                    let x1 = interpret_expr(environment, e1)?;
+                    return if x1.truthiness() {
+                        Ok(x1)
+                    } else {
+                        interpret_expr(environment, e2)
+                    };
+                }
+                _ => ()
+            }
             let x1 = interpret_expr(environment, e1)?;
             let x2 = interpret_expr(environment, e2)?;
             match op {
@@ -251,31 +264,13 @@ fn interpret_expr(
                 | BinaryOperator::GreaterEqual
                 | BinaryOperator::Less
                 | BinaryOperator::LessEqual => binary_comparison(op, &x1, &x2, i),
-                // TODO lazy circuit
-                BinaryOperator::And => match (&x1, &x2) {
-                    (Nil, _) => Err(NilReference(*i)),
-                    (_, Nil) => Err(NilReference(*i)),
-                    (Bool(b1), Bool(b2)) => Ok(Bool(*b1 && *b2)),
-                    _ => binary_type_error(op, &x1, &x2, i)
-                }
-                // TODO lazy circuit
-                BinaryOperator::Or => match (&x1, &x2) {
-                    (Nil, _) => Err(NilReference(*i)),
-                    (_, Nil) => Err(NilReference(*i)),
-                    (Bool(b1), Bool(b2)) => Ok(Bool(*b1 || *b2)),
-                    _ => binary_type_error(op, &x1, &x2, i)
-                }
+                BinaryOperator::And => panic!("Should have already been handled"),
+                BinaryOperator::Or => panic!("Should have already been handled"),
             }
         }
-        AnnotatedExpression::Ternary(cond, e1, e2, i) => {
+        AnnotatedExpression::Ternary(cond, e1, e2, _) => {
             let i_cond = interpret_expr(environment, cond)?;
-            match i_cond {
-                Nil => Err(NilReference(*i)),
-                Bool(b) =>
-                    if b { interpret_expr(environment, e1) } else { interpret_expr(environment, e2) },
-                _ => Err(TypeError(
-                    format!("Cannot apply ternary operator to non-Bool cond '{:?}'", i_cond), *i)),
-            }
+            interpret_expr(environment, if i_cond.truthiness() { e1 } else { e2 })
         }
     }
 }
@@ -336,51 +331,57 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn simple_program() {
-        let ast = parse(&tokenize("var x = 1;\nvar y = x + 1;\nprint y + 4;").unwrap()).unwrap();
+    fn printed_string(program: &str) -> String {
+        let ast = parse(&tokenize(program).unwrap()).unwrap();
         let mut buff = Cursor::new(Vec::new());
         interpret_go(&ast, &mut buff).unwrap();
+        buff.get_ref().into_iter().map(|i| *i as char).collect()
+    }
 
-        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
-        assert_eq!(string, "6");
+    fn error_line(program: &str) -> usize {
+        let ast = parse(&tokenize(program).unwrap()).unwrap();
+        let mut buff = Cursor::new(Vec::new());
+        interpret_go(&ast, &mut buff).unwrap_err().get_info().line
+    }
+
+    #[test]
+    fn simple_program() {
+        assert_eq!(printed_string("var x = 1;\nvar y = x + 1;\nprint y + 4;"), "6");
     }
 
     #[test]
     fn printing_assignments() {
-        let ast = parse(&tokenize("var x;\nprint x = 2;").unwrap()).unwrap();
-        let mut buff = Cursor::new(Vec::new());
-        interpret_go(&ast, &mut buff).unwrap();
-
-        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
-        assert_eq!(string, "2");
+        assert_eq!(printed_string("var x;\nprint x = 2;"), "2");
     }
 
     #[test]
     fn invalid_reference() {
-        let ast = parse(&tokenize("print a;\nvar a = 5;").unwrap()).unwrap();
-        let mut buff = Cursor::new(Vec::new());
-        assert_eq!(
-            interpret_go(&ast, &mut buff).unwrap_err().get_info().line,
-            1,
-        )
+        assert_eq!(error_line("print a;\nvar a = 5;"), 1)
     }
 
     #[test]
     fn string_concat() {
-        let ast = parse(&tokenize("var x = 1;\nvar y = \"2\"; var z =3;\nprint x + y + z + \"\\n\" + 4 + \"hi\";").unwrap()).unwrap();
-        let mut buff = Cursor::new(Vec::new());
-        interpret_go(&ast, &mut buff).unwrap();
-        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
-        assert_eq!(string, "123\n4hi")
+        assert_eq!(
+            printed_string(
+                "var x = 1;\nvar y = \"2\"; var z =3;\nprint x + y + z + \"\\n\" + 4 + \"hi\";"),
+            "123\n4hi",
+        )
     }
 
     #[test]
     fn if_else_stmt() {
-        let ast = parse(&tokenize(r#"if (1 > 2) "foo" / 3; else print 2;"#).unwrap()).unwrap();
-        let mut buff = Cursor::new(Vec::new());
-        interpret_go(&ast, &mut buff).unwrap();
-        let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
-        assert_eq!(string, "2")
+        assert_eq!(printed_string(r#"if (1 > 2) "foo" / 3; else print 2;"#), "2")
+    }
+
+    #[test]
+    fn and_short_circuit() {
+        assert_eq!(printed_string(r#"print "hi" and 2;"#), "2");
+        assert_eq!(printed_string(r#"print nil and 2;"#), "nil");
+    }
+
+    #[test]
+    fn or_short_circuit() {
+        assert_eq!(printed_string(r#"print "hi" or 2;"#), "hi");
+        assert_eq!(printed_string(r#"print nil or 2;"#), "2");
     }
 }
