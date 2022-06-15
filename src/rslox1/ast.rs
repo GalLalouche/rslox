@@ -7,6 +7,7 @@ pub struct Program {
 pub enum Statement {
     Block(Vec<Statement>),
     IfElse {cond: Expression, if_stmt: Box<Statement>, else_stmt: Option<Box<Statement>>},
+    While(Expression, Box<Statement>),
     Variable(String, Expression),
     Expression(Expression),
     Print(Expression),

@@ -23,6 +23,7 @@ pub enum AnnotatedStatement {
         else_stmt: Option<Box<AnnotatedStatement>>,
         error_info: ErrorInfo,
     },
+    While(AnnotatedExpression, Box<AnnotatedStatement>, ErrorInfo),
     Variable(String, AnnotatedExpression, ErrorInfo),
     Print(AnnotatedExpression, ErrorInfo),
     Expression(AnnotatedExpression),
@@ -39,6 +40,8 @@ impl From<&AnnotatedStatement> for Statement {
                     if_stmt: Box::new(if_stmt.deref().into()),
                     else_stmt: else_stmt.as_ref().map(|e| Box::new(e.deref().into())),
                 },
+            AnnotatedStatement::While(cond, stmt, _) =>
+                Statement::While(cond.into(), Box::new(stmt.as_ref().into())),
             AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.clone(), e.into()),
             AnnotatedStatement::Expression(e) => Statement::Expression(e.into()),
             AnnotatedStatement::Print(p, _) => Statement::Print(p.into()),
@@ -58,14 +61,14 @@ pub enum AnnotatedExpression {
 
 impl AnnotatedExpression {
     pub fn error_info(&self) -> ErrorInfo {
-      *(match self {
-          AnnotatedExpression::Atomic(_, i) => i,
-          AnnotatedExpression::Grouping(_, i) => i,
-          AnnotatedExpression::Assign(_, _, i) => i,
-          AnnotatedExpression::Unary(_, _, i) => i,
-          AnnotatedExpression::Binary(_, _, _, i) => i,
-          AnnotatedExpression::Ternary(_, _, _, i) => i,
-      })
+        *(match self {
+            AnnotatedExpression::Atomic(_, i) => i,
+            AnnotatedExpression::Grouping(_, i) => i,
+            AnnotatedExpression::Assign(_, _, i) => i,
+            AnnotatedExpression::Unary(_, _, i) => i,
+            AnnotatedExpression::Binary(_, _, _, i) => i,
+            AnnotatedExpression::Ternary(_, _, _, i) => i,
+        })
     }
 }
 

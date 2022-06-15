@@ -149,6 +149,16 @@ fn interpret_statement(
                 Ok(None)
             }
         }
+        AnnotatedStatement::While(cond, stmt, _) => {
+            loop {
+                let cond_value = interpret_expr(environment, cond).map(|e| e.truthiness())?;
+                if !cond_value {
+                    break;
+                }
+                interpret_statement(environment, stmt, writer)?;
+            }
+            Ok(None)
+        }
         AnnotatedStatement::Block(ss, _) => {
             environment.nest();
             let mut final_expr = None;
@@ -383,5 +393,10 @@ mod tests {
     fn or_short_circuit() {
         assert_eq!(printed_string(r#"print "hi" or 2;"#), "hi");
         assert_eq!(printed_string(r#"print nil or 2;"#), "2");
+    }
+
+    #[test]
+    fn while_loop() {
+        assert_eq!(printed_string("var x = 0;\nwhile (x < 10)\nx = x + 1;\n print x;\n"), "10");
     }
 }

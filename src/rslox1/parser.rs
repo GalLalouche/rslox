@@ -98,6 +98,17 @@ impl<'a> Parser<'a> {
                     else_stmt,
                     error_info: i,
                 })
+            }).unwrap_or_else(|| self.while_statement())
+    }
+
+    fn while_statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
+        self.matches_single(TokenType::While)
+            .map(|i| {
+                self.consume(TokenType::LeftParen, None)?;
+                let cond = self.expression()?;
+                self.consume(TokenType::RightParen, None)?;
+                let stmt = self.statement().map(Box::new)?;
+                Ok(AnnotatedStatement::While(cond, stmt, i))
             }).unwrap_or_else(|| self.declaration())
     }
 
