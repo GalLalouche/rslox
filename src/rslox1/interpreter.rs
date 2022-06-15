@@ -64,7 +64,7 @@ impl LoxError for InterpreterError {
 
 type InterpretResult<A> = Result<A, InterpreterError>;
 
-pub fn interpret(program: &AnnotatedProgram) -> LoxResult<()> {
+pub fn interpret(program: &AnnotatedProgram) -> LoxResult<Option<LoxValue>> {
     convert_error(interpret_go(&program, &mut io::stdout()))
 }
 
@@ -107,38 +107,64 @@ impl Environment {
     }
 }
 
-fn interpret_go(program: &AnnotatedProgram, writer: &mut impl Write) -> InterpretResult<()> {
+fn interpret_go(
+    program: &AnnotatedProgram,
+    writer: &mut impl Write,
+) -> InterpretResult<Option<LoxValue>> {
     let mut environment = Environment::new();
+    let mut final_expr: Option<LoxValue> = None;
     for statement in &program.statements {
-        interpret_statement(&mut environment, &statement, writer)?;
+        final_expr = interpret_statement(&mut environment, &statement, writer)?;
     }
-    Ok(())
+    Ok(final_expr)
 }
 
 fn interpret_statement(
     environment: &mut Environment,
     statement: &AnnotatedStatement,
     writer: &mut impl Write,
-) -> InterpretResult<()> {
+) -> InterpretResult<Option<LoxValue>> {
     match statement {
         AnnotatedStatement::Variable(name, e, _) => {
             let expr = interpret_expr(environment, e)?;
             environment.define(name.to_owned(), expr);
-            Ok(())
+            Ok(None)
+        }
+        AnnotatedStatement::IfElse { cond, if_stmt, else_stmt, .. } => {
+            let cond_value = interpret_expr(environment, cond)?;
+            let cond_bool_value = match cond_value {
+                Bool(b) => Ok(b),
+                _ => Err(TypeError(
+                    format!(
+                        "Condition '{:?}' wasn't a Boolean, but '{}'",
+                        cond,
+                        cond_value.stringify(),
+                    ),
+                    cond.error_info(),
+                )),
+            }?;
+            if cond_bool_value {
+                interpret_statement(environment, if_stmt, writer)
+            } else if let Some(s) = else_stmt {
+                interpret_statement(environment, s, writer)
+            } else {
+                Ok(None)
+            }
         }
         AnnotatedStatement::Block(ss, _) => {
             environment.nest();
+            let mut final_expr = None;
             for s in ss {
-                interpret_statement(environment, s, writer)?;
+                final_expr = interpret_statement(environment, s, writer)?;
             }
             environment.unnest();
-            Ok(())
+            Ok(final_expr)
         }
-        AnnotatedStatement::Expression(e) => interpret_expr(environment, e).map(|_| ()),
+        AnnotatedStatement::Expression(e) => interpret_expr(environment, e).map(|e| Some(e)),
         AnnotatedStatement::Print(e, _) => {
             let expr = interpret_expr(environment, e)?;
             write!(writer, "{}", expr.stringify()).expect("Not written");
-            Ok(())
+            Ok(None)
         }
     }
 }
@@ -350,11 +376,11 @@ mod tests {
     }
 
     #[test]
-    fn blocks() {
-        let ast = parse(&tokenize("var x = 1;\nvar y = 2; var z;\n{var y = 3;\nz = x + y;\n}\nprint x + y + z;").unwrap()).unwrap();
+    fn if_else_stmt() {
+        let ast = parse(&tokenize(r#"if (1 > 2) "foo" / 3; else print 2;"#).unwrap()).unwrap();
         let mut buff = Cursor::new(Vec::new());
         interpret_go(&ast, &mut buff).unwrap();
         let string: String = buff.get_ref().into_iter().map(|i| *i as char).collect();
-        assert_eq!(string, "7")
+        assert_eq!(string, "2")
     }
 }

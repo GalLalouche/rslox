@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use crate::rslox1::ast::{Atom, BinaryOperator, Expression, Program, Statement, UnaryOperator};
 use crate::rslox1::common::ErrorInfo;
 
@@ -15,9 +17,15 @@ impl From<&AnnotatedProgram> for Program {
 #[derive(Debug, PartialEq, Clone)]
 pub enum AnnotatedStatement {
     Block(Vec<AnnotatedStatement>, ErrorInfo),
+    IfElse {
+        cond: AnnotatedExpression,
+        if_stmt: Box<AnnotatedStatement>,
+        else_stmt: Option<Box<AnnotatedStatement>>,
+        error_info: ErrorInfo,
+    },
     Variable(String, AnnotatedExpression, ErrorInfo),
-    Expression(AnnotatedExpression),
     Print(AnnotatedExpression, ErrorInfo),
+    Expression(AnnotatedExpression),
 }
 
 impl From<&AnnotatedStatement> for Statement {
@@ -25,6 +33,12 @@ impl From<&AnnotatedStatement> for Statement {
         match ae {
             AnnotatedStatement::Block(ss, _) =>
                 Statement::Block(ss.into_iter().map(|e| e.into()).collect()),
+            AnnotatedStatement::IfElse { cond, if_stmt, else_stmt, .. } =>
+                Statement::IfElse {
+                    cond: cond.into(),
+                    if_stmt: Box::new(if_stmt.deref().into()),
+                    else_stmt: else_stmt.as_ref().map(|e| Box::new(e.deref().into())),
+                },
             AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.clone(), e.into()),
             AnnotatedStatement::Expression(e) => Statement::Expression(e.into()),
             AnnotatedStatement::Print(p, _) => Statement::Print(p.into()),
@@ -40,6 +54,19 @@ pub enum AnnotatedExpression {
     Unary(UnaryOperator, Box<AnnotatedExpression>, ErrorInfo),
     Binary(BinaryOperator, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
     Ternary(Box<AnnotatedExpression>, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
+}
+
+impl AnnotatedExpression {
+    pub fn error_info(&self) -> ErrorInfo {
+      *(match self {
+          AnnotatedExpression::Atomic(_, i) => i,
+          AnnotatedExpression::Grouping(_, i) => i,
+          AnnotatedExpression::Assign(_, _, i) => i,
+          AnnotatedExpression::Unary(_, _, i) => i,
+          AnnotatedExpression::Binary(_, _, _, i) => i,
+          AnnotatedExpression::Ternary(_, _, _, i) => i,
+      })
+    }
 }
 
 impl From<&AnnotatedExpression> for Expression {

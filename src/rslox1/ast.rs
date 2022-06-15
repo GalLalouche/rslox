@@ -6,6 +6,7 @@ pub struct Program {
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Block(Vec<Statement>),
+    IfElse {cond: Expression, if_stmt: Box<Statement>, else_stmt: Option<Box<Statement>>},
     Variable(String, Expression),
     Expression(Expression),
     Print(Expression),

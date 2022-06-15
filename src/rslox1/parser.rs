@@ -21,6 +21,12 @@ struct ParserError {
     token: Token,
 }
 
+impl ParserError {
+    pub fn new<S: Into<String>>(message: S, token: Token) -> Self {
+        ParserError { message: message.into(), token }
+    }
+}
+
 impl LoxError for ParserError {
     fn get_info(&self) -> ErrorInfo {
         ErrorInfo { line: self.token.line }
@@ -59,6 +65,10 @@ impl<'a> Parser<'a> {
             .unwrap_or(Ok(AnnotatedProgram { statements }))
     }
 
+    fn statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
+        self.block()
+    }
+
     fn block(&mut self) -> Result<AnnotatedStatement, ParserError> {
         self.matches_single(TokenType::LeftBrace)
             .map(|i| {
@@ -68,8 +78,30 @@ impl<'a> Parser<'a> {
                 }
                 self.consume(TokenType::RightBrace, None).unwrap();
                 Ok(Block(statements, i))
+            }).unwrap_or_else(|| self.if_statement())
+    }
+
+    fn if_statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
+        self.matches_single(TokenType::If)
+            .map(|i| {
+                self.consume(TokenType::LeftParen, None)?;
+                let cond = self.expression()?;
+                self.consume(TokenType::RightParen, None)?;
+                let if_stmt = self.statement().map(Box::new)?;
+                let else_stmt = self.matches_single(TokenType::Else)
+                    .map(|_| {
+                        self.statement().map(|e| Some(Box::new(e)))
+                    }).unwrap_or(Ok(None))?;
+                Ok(AnnotatedStatement::IfElse {
+                    cond,
+                    if_stmt,
+                    else_stmt,
+                    error_info: i,
+                })
             }).unwrap_or_else(|| self.declaration())
     }
+
+    // Everything below this line expects a terminating semicolon.
     fn declaration(&mut self) -> Result<AnnotatedStatement, ParserError> {
         self.matches_single(TokenType::Var)
             .map(|i| {
@@ -86,14 +118,14 @@ impl<'a> Parser<'a> {
                     .unwrap_or(Ok(Atomic(Atom::Nil, i)))?;
                 Ok(Variable(name, expr, i))
             }).unwrap_or_else(|| {
-            self.statement()
+            self.print()
         }).and_then(|e| {
             self.consume(TokenType::Semicolon, None)?;
             Ok(e)
         })
     }
 
-    fn statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
+    fn print(&mut self) -> Result<AnnotatedStatement, ParserError> {
         self.matches_single(TokenType::Print)
             .map(|i| {
                 self.expression().map(|e| AnnotatedStatement::Print(e, i))
@@ -118,6 +150,12 @@ impl<'a> Parser<'a> {
 
     fn assignment(&mut self) -> Result<AnnotatedExpression, ParserError> {
         let expr = self.equality()?;
+        if self.is_at_end() {
+            return Err(ParserError::new(
+                "Unexpected EOF",
+                Token::new(self.previous().line, TokenType::Eof),
+            ));
+        }
         let next = self.peek().clone();
         match next.get_type() {
             TokenType::Equal => {
@@ -324,6 +362,9 @@ impl<'a> Parser<'a> {
     }
 
     fn synchronize(&mut self) {
+        if self.is_at_end() {
+            return;
+        }
         self.advance();
         while !self.is_at_end() {
             if self.previous().get_type() == &TokenType::Semicolon {
@@ -406,7 +447,7 @@ mod tests {
                 Box::new(Atomic(Number(3.0))),
             );
         assert_eq!(expr, expected);
-     }
+    }
 
     #[test]
     fn string_concat() {
@@ -566,6 +607,52 @@ mod tests {
             Statement::variable("z", Atomic(Atom::Nil)),
             Statement::variable("x", Atomic(Atom::Nil)),
         ]);
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn missing_semicolon() {
+        let tokens = tokenize("print 42").unwrap();
+        let program = parse(&tokens).unwrap_err();
+        assert_eq!(
+            program.into_iter().map(|e| e.get_info().line).collect::<Vec<usize>>(),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn if_stmt() {
+        let statement = parse_single_statement("if (x > 2) print y;");
+        let expected = Statement::IfElse {
+            cond: Binary(
+                BinaryOperator::Greater,
+                Box::new(Atomic(Atom::identifier("x"))),
+                Box::new(Atomic(Number(2.0))),
+            ),
+            if_stmt: Box::new(Statement::Print(Atomic(Atom::identifier("y")))),
+            else_stmt: None,
+        };
+        assert_eq!(statement, expected);
+    }
+
+    #[test]
+    fn if_else_stmt() {
+        let statement = parse_single_statement("if (x > 2) print y; else {var z = true; print false;}");
+        let expected = Statement::IfElse {
+            cond: Binary(
+                BinaryOperator::Greater,
+                Box::new(Atomic(Atom::identifier("x"))),
+                Box::new(Atomic(Number(2.0))),
+            ),
+            if_stmt: Box::new(Statement::Print(Atomic(Atom::identifier("y")))),
+            else_stmt: Some(Box::new(Statement::Block(
+                vec![
+                    Statement::variable("z", Atomic(Atom::True)),
+                    Statement::Print(Atomic(Atom::False)),
+                ]
+            )
+            )),
+        };
         assert_eq!(statement, expected);
     }
 }
