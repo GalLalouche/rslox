@@ -399,4 +399,9 @@ mod tests {
     fn while_loop() {
         assert_eq!(printed_string("var x = 0;\nwhile (x < 10)\nx = x + 1;\n print x;\n"), "10");
     }
+
+    #[test]
+    fn for_loop() {
+        assert_eq!(printed_string("var x;\nfor (var y = 0; y < 10; x = y = y + 1) {}\n print x;\n"), "10");
+    }
 }

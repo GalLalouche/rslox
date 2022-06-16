@@ -109,6 +109,61 @@ impl<'a> Parser<'a> {
                 self.consume(TokenType::RightParen, None)?;
                 let stmt = self.statement().map(Box::new)?;
                 Ok(AnnotatedStatement::While(cond, stmt, i))
+            }).unwrap_or_else(|| self.for_statement())
+    }
+
+    fn for_statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
+        self.matches_single(TokenType::For)
+            .map(|i| {
+                self.consume(TokenType::LeftParen, None)?;
+                self.verify_no_end()?;
+                let pre = if self.peek().get_type() != &TokenType::Semicolon {
+                    self.declaration().map(Some)
+                } else {
+                    Ok(None)
+                }?;
+                self.verify_no_end()?;
+                if self.peek().get_type() == &TokenType::Semicolon {
+                    // It's possible that the var declaration already consumed the semicolon. This
+                    // is honestly a very stupid hack, since maybe declaration shouldn't always
+                    // consume a semicolon, but it's good enough for now.
+                    self.advance();
+                }
+                self.verify_no_end()?;
+                let cond = if self.peek().get_type() == &TokenType::Semicolon {
+                    Ok(Atomic(Atom::True, i))
+                } else {
+                    self.expression()
+                }?;
+                self.consume(TokenType::Semicolon, None)?;
+                self.verify_no_end()?;
+                let post = if self.peek().get_type() == &TokenType::RightParen {
+                    Ok(None)
+                } else {
+                    self.expression().map(Some)
+                }?;
+                self.consume(TokenType::RightParen, None)?;
+                let stmt = self.statement().map(Box::new)?;
+                let body = if let Some(p) = post {
+                    let error_info = p.error_info().clone();
+                    Box::new(Block(vec![*stmt, AnnotatedStatement::Expression(p)], error_info))
+                } else {
+                    stmt
+                };
+                let while_stmt = AnnotatedStatement::While(cond, body, i);
+                Ok(
+                    if let Some(p) = pre {
+                        Block(
+                            vec![
+                                p,
+                                while_stmt,
+                            ],
+                            i,
+                        )
+                    } else {
+                        while_stmt
+                    }
+                )
             }).unwrap_or_else(|| self.declaration())
     }
 
@@ -161,12 +216,7 @@ impl<'a> Parser<'a> {
 
     fn assignment(&mut self) -> Result<AnnotatedExpression, ParserError> {
         let expr = self.logical_or()?;
-        if self.is_at_end() {
-            return Err(ParserError::new(
-                "Unexpected EOF",
-                Token::new(self.previous().line, TokenType::Eof),
-            ));
-        }
+        self.verify_no_end()?;
         let next = self.peek().clone();
         match next.get_type() {
             TokenType::Equal => {
@@ -408,6 +458,17 @@ impl<'a> Parser<'a> {
             self.advance();
         }
     }
+
+    fn verify_no_end(&self) -> Result<(), ParserError> {
+        if self.is_at_end() {
+            Err(ParserError::new(
+                "Unexpected EOF",
+                Token::new(self.previous().line, TokenType::Eof),
+            ))
+        } else {
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
@@ -417,6 +478,7 @@ mod tests {
     use crate::rslox1::ast::{Expression, Program, Statement};
     use crate::rslox1::ast::Atom::Number;
     use crate::rslox1::ast::Expression::{Atomic, Binary, Grouping, Ternary, Unary};
+    use crate::rslox1::ast::Statement::While;
     use crate::rslox1::lexer::tokenize;
 
     use super::*;
@@ -699,6 +761,16 @@ mod tests {
                     Box::new(Atomic(Atom::identifier("c"))),
                 ),
             ),
+        );
+        assert_eq!(expr, expected)
+    }
+
+    #[test]
+    fn empty_for_loop_desugaring() {
+        let expr = parse_single_statement("for (;;) print 4;");
+        let expected = While(
+            Atomic(Atom::True),
+            Box::new(Statement::Print(Atomic(Number(4.0)))),
         );
         assert_eq!(expr, expected)
     }
