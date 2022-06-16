@@ -1,3 +1,6 @@
+#![feature(iter_intersperse)]
+#![feature(try_blocks)]
+
 use std::env;
 
 use crate::rslox1::prompt::run_prompt;

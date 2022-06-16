@@ -16,10 +16,10 @@ type LexResult<A> = Result<A, LexError>;
 #[derive(Debug, PartialEq, Clone)]
 pub enum TokenType {
     // Single-character tokens.
-    LeftParen,
-    RightParen,
-    LeftBrace,
-    RightBrace,
+    OpenParen,
+    CloseParen,
+    OpenBrace,
+    CloseBrace,
     Comma,
     Question,
     Colon,
@@ -78,7 +78,7 @@ impl Display for TokenType {
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token {
     pub line: usize,
-    r#type: TokenType,
+    pub r#type: TokenType,
 }
 
 impl Token {
@@ -171,10 +171,10 @@ impl<'a> Lexer<'a> {
             ',' => Ok(self.add_token_type(TokenType::Comma)),
             '?' => Ok(self.add_token_type(TokenType::Question)),
             ':' => Ok(self.add_token_type(TokenType::Colon)),
-            '(' => Ok(self.add_token_type(TokenType::LeftParen)),
-            ')' => Ok(self.add_token_type(TokenType::RightParen)),
-            '{' => Ok(self.add_token_type(TokenType::LeftBrace)),
-            '}' => Ok(self.add_token_type(TokenType::RightBrace)),
+            '(' => Ok(self.add_token_type(TokenType::OpenParen)),
+            ')' => Ok(self.add_token_type(TokenType::CloseParen)),
+            '{' => Ok(self.add_token_type(TokenType::OpenBrace)),
+            '}' => Ok(self.add_token_type(TokenType::CloseBrace)),
             '.' => Ok(self.add_token_type(TokenType::Dot)),
             '-' => Ok(self.add_token_type(TokenType::Minus)),
             '+' => Ok(self.add_token_type(TokenType::Plus)),
@@ -289,7 +289,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn read_identifier(&mut self) -> TokenType {
-        while self.peek_test(|e: char| e.is_alphanumeric()) {
+        while self.peek_test(|e: char| e.is_alphanumeric() || e == '_') {
             self.advance();
         }
         let word = self.current_lexeme();
@@ -345,8 +345,8 @@ mod tests {
     #[test]
     fn test_identifier() {
         assert_eq!(
-            tokenize("x").expect("tokenize failed"),
-            vec!(Token::new(1, TokenType::identifier("x"))),
+            tokenize("x_y").expect("tokenize failed"),
+            vec!(Token::new(1, TokenType::identifier("x_y"))),
         )
     }
 
@@ -407,6 +407,27 @@ mod tests {
                 Token::new(2, TokenType::identifier("foobar")),
                 Token::new(2, TokenType::Semicolon),
             ),
+        )
+    }
+
+    #[test]
+    fn return_in_function() {
+        assert_eq!(
+            tokenize("fun f(x) { return x+1; }").expect("tokenize failed"),
+            vec![
+                Token::new(1, TokenType::Fun),
+                Token::new(1, TokenType::identifier("f")),
+                Token::new(1, TokenType::OpenParen),
+                Token::new(1, TokenType::identifier("x")),
+                Token::new(1, TokenType::CloseParen),
+                Token::new(1, TokenType::OpenBrace),
+                Token::new(1, TokenType::Return),
+                Token::new(1, TokenType::identifier("x")),
+                Token::new(1, TokenType::Plus),
+                Token::new(1, TokenType::number_literal(1.0)),
+                Token::new(1, TokenType::Semicolon),
+                Token::new(1, TokenType::CloseBrace),
+            ],
         )
     }
 }

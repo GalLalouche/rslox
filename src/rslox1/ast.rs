@@ -1,3 +1,5 @@
+use crate::rslox1::ast::Statement::Function;
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {
     pub statements: Vec<Statement>,
@@ -9,13 +11,26 @@ pub enum Statement {
     IfElse { cond: Expression, if_stmt: Box<Statement>, else_stmt: Option<Box<Statement>> },
     While(Expression, Box<Statement>),
     Variable(String, Expression),
+    Function {
+        name: String,
+        args: Vec<String>,
+        body: Vec<Statement>,
+    },
     Expression(Expression),
     Print(Expression),
+    Return(Option<Expression>),
 }
 
 impl Statement {
     pub fn variable<S: Into<String>>(str: S, expr: Expression) -> Self {
         Statement::Variable(str.into(), expr)
+    }
+    pub fn function(name: &str, args: Vec<&str>, body: Vec<Statement>) -> Self {
+        Function {
+            name: name.into(),
+            args: args.into_iter().map(|e| e.into()).collect(),
+            body,
+        }
     }
 }
 
@@ -23,6 +38,7 @@ impl Statement {
 pub enum Expression {
     Grouping(Box<Expression>),
     Assign(String, Box<Expression>),
+    FunctionCall(Box<Expression>, Vec<Expression>),
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Ternary(Box<Expression>, Box<Expression>, Box<Expression>),
@@ -45,6 +61,15 @@ impl Expression {
                     Atom::Nil => indent("nil"),
                 }
                 Expression::Grouping(e) => indent(format!("(\n{})", aux(e, depth + 1)).as_ref()),
+                Expression::FunctionCall(f, args) =>
+                    indent(format!(
+                        "{}(\n{})",
+                        aux(f, depth),
+                        args.into_iter()
+                            .map(|arg| aux(arg, depth + 1))
+                            .intersperse(",\n".to_owned())
+                            .collect::<String>(),
+                    ).as_ref()),
                 Expression::Assign(t, e) =>
                     indent(format!("{:?} := (\n{})", t, aux(e, depth + 1)).as_ref()),
                 Expression::Unary(op, e) =>

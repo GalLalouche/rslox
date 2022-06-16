@@ -25,7 +25,14 @@ pub enum AnnotatedStatement {
     },
     While(AnnotatedExpression, Box<AnnotatedStatement>, ErrorInfo),
     Variable(String, AnnotatedExpression, ErrorInfo),
+    Function {
+        name: String,
+        params: Vec<String>,
+        body: Vec<AnnotatedStatement>,
+        error_info: ErrorInfo,
+    },
     Print(AnnotatedExpression, ErrorInfo),
+    Return(Option<AnnotatedExpression>, ErrorInfo),
     Expression(AnnotatedExpression),
 }
 
@@ -43,7 +50,13 @@ impl From<&AnnotatedStatement> for Statement {
             AnnotatedStatement::While(cond, stmt, _) =>
                 Statement::While(cond.into(), Box::new(stmt.as_ref().into())),
             AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.clone(), e.into()),
+            AnnotatedStatement::Function { name, params: args, body, .. } => Statement::Function {
+                name: name.clone(),
+                args: args.clone(),
+                body: body.into_iter().map(|e| e.into()).collect(),
+            },
             AnnotatedStatement::Expression(e) => Statement::Expression(e.into()),
+            AnnotatedStatement::Return(o, _) => Statement::Return(o.as_ref().map(|e| e.into())),
             AnnotatedStatement::Print(p, _) => Statement::Print(p.into()),
         }
     }
@@ -53,6 +66,7 @@ impl From<&AnnotatedStatement> for Statement {
 pub enum AnnotatedExpression {
     Atomic(Atom, ErrorInfo),
     Grouping(Box<AnnotatedExpression>, ErrorInfo),
+    FunctionCall(Box<AnnotatedExpression>, Vec<AnnotatedExpression>, ErrorInfo),
     Assign(String, Box<AnnotatedExpression>, ErrorInfo),
     Unary(UnaryOperator, Box<AnnotatedExpression>, ErrorInfo),
     Binary(BinaryOperator, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
@@ -64,6 +78,7 @@ impl AnnotatedExpression {
         *(match self {
             AnnotatedExpression::Atomic(_, i) => i,
             AnnotatedExpression::Grouping(_, i) => i,
+            AnnotatedExpression::FunctionCall(_, _, i) => i,
             AnnotatedExpression::Assign(_, _, i) => i,
             AnnotatedExpression::Unary(_, _, i) => i,
             AnnotatedExpression::Binary(_, _, _, i) => i,
@@ -78,6 +93,11 @@ impl From<&AnnotatedExpression> for Expression {
             AnnotatedExpression::Atomic(e, _) => Expression::Atomic(e.to_owned()),
             AnnotatedExpression::Grouping(e, _) =>
                 Expression::Grouping(Box::new(e.as_ref().into())),
+            AnnotatedExpression::FunctionCall(f, args, _) =>
+                Expression::FunctionCall(
+                    Box::new(f.as_ref().into()),
+                    args.into_iter().map(|e| e.into()).collect(),
+                ),
             AnnotatedExpression::Assign(n, e, _) =>
                 Expression::Assign(n.to_owned(), Box::new(e.as_ref().into())),
             AnnotatedExpression::Unary(op, e, _) =>
