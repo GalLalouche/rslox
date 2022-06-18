@@ -1,13 +1,21 @@
+use std::cell::RefCell;
+use std::rc::Rc;
 use crate::rslox1::annotated_ast::AnnotatedStatement;
+use crate::rslox1::interpreter::environment::Environment;
 use crate::rslox1::interpreter::lox_value::LoxValue::{Bool, Callable, Native, Number, Nil};
 use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub enum LoxValue {
     // User-defined functions may depend on the environment, so we can have their implementation
     // here without drowning in lifetime parameters shenanigans. So instead, we just keep the
     // statements here.
-    Callable { arity: usize, params: Vec<String>, body: Vec<AnnotatedStatement> },
+    Callable {
+        arity: usize,
+        params: Vec<String>,
+        body: Vec<AnnotatedStatement>,
+        closure: Rc<RefCell<Environment>>,
+    },
     // Native functions can be defined using basic closures, since by definition they don't need to
     // rely on Environment. Of course, they can't be defined using plain Lox statements since if
     // they could, we wouldn't them to define them as native, now would we?
@@ -23,8 +31,13 @@ pub enum LoxValue {
 }
 
 impl LoxValue {
-    pub fn callable(arity: usize, params: Vec<String>, body: Vec<AnnotatedStatement>) -> Self {
-        Callable { arity, params, body }
+    pub fn callable(
+        arity: usize,
+        params: Vec<String>,
+        body: Vec<AnnotatedStatement>,
+        closure: Rc<RefCell<Environment>>,
+    ) -> Self {
+        Callable { arity, params, body, closure}
     }
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -60,8 +73,8 @@ impl LoxValue {
 
     pub fn equal_equal(&self, other: &LoxValue) -> LoxValue {
         match (self, other) {
-            (Callable {..}, _) => todo!(),
-            (Native {..}, _) => todo!(),
+            (Callable { .. }, _) => todo!(),
+            (Native { .. }, _) => todo!(),
             (Number(n1), Number(n2)) => Bool(n1.eq(&n2)),
             (LoxValue::String(s1), LoxValue::String(s2)) => Bool(s1 == s2),
             (Bool(b1), Bool(b2)) => Bool(b1 == b2),

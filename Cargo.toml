@@ -3,9 +3,5 @@ name = "rslox1"
 version = "0.1.0"
 edition = "2018"
 
-[toolchain]
-channel = "nightly"
-
-
 [dependencies]
 nonempty = "0.7.0"

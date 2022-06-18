@@ -3,7 +3,7 @@ use crate::rslox1::common::{ErrorInfo, LoxError};
 use crate::rslox1::interpreter::lox_value::LoxValue;
 use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UnrecognizedIdentifier};
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub enum InterpreterErrorOrControlFlow {
     UnrecognizedIdentifier(String, ErrorInfo),
     ArityError { expected: usize, actual: usize, error_info: ErrorInfo },

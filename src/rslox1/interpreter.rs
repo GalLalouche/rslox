@@ -1,5 +1,8 @@
+use std::cell::RefCell;
 use std::io;
 use std::io::Write;
+use std::ops::Deref;
+use std::rc::Rc;
 
 use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
@@ -42,10 +45,12 @@ fn interpret_statement(
             Ok(None)
         }
         AnnotatedStatement::Function { name, params, body, .. } => {
+            let closure = Rc::new(RefCell::new(environment.new_nested()));
             let callable = Callable {
                 arity: params.len(),
                 params: params.clone(),
                 body: body.clone(),
+                closure,
             };
             environment.define(name.to_owned(), callable);
             Ok(None)
@@ -71,15 +76,14 @@ fn interpret_statement(
             Ok(None)
         }
         AnnotatedStatement::Block(ss, _) => {
-            environment.nest();
+            let mut nested = environment.new_nested();
             let result = try {
                 let mut final_expr = None;
                 for s in ss {
-                    final_expr = interpret_statement(environment, s, writer)?;
+                    final_expr = interpret_statement(&mut nested, s, writer)?;
                 }
                 final_expr
             };
-            environment.unnest();
             result
         }
         AnnotatedStatement::Expression(e) => interpret_expr(environment, e, writer).map(|e| Some(e)),
@@ -110,6 +114,7 @@ fn interpret_expr(
             Atom::Identifier(name) =>
                 environment
                     .get(name)
+                    .as_deref()
                     .cloned()
                     .ok_or(UnrecognizedIdentifier(name.to_owned(), *i)),
             Atom::Number(n) => Ok(Number(n.to_owned())),
@@ -137,21 +142,20 @@ fn interpret_expr(
                     check_arity(arity)?;
                     func(arg_values)
                 }
-                Callable { arity, params, body } => {
+                Callable { arity, params, body, closure } => {
                     check_arity(arity)?;
                     let params_argument = &params;
                     let args = &arg_values;
-                    environment.nest();
+                    let mut nested = closure.deref().borrow_mut().new_nested();
                     let result = try {
                         for (param_name, arg) in params_argument.into_iter().zip(args) {
-                            environment.define(param_name.to_owned(), arg.clone());
+                            nested.define(param_name.to_owned(), arg.clone());
                         }
                         for stmt in body {
-                            interpret_statement(environment, &stmt, writer)?;
+                            interpret_statement(&mut nested, &stmt, writer)?;
                         }
                         Nil
                     };
-                    environment.unnest();
                     match result {
                         Err(Returned(value, _)) => Ok(value),
                         e => e
@@ -164,7 +168,7 @@ fn interpret_expr(
         }
         AnnotatedExpression::Assign(name, expr, i) => {
             let value = interpret_expr(environment, expr, writer)?;
-            if environment.assign(name.to_owned(), value.to_owned()) {
+            if environment.assign(name, &value) {
                 Ok(value)
             } else {
                 Err(UnrecognizedIdentifier(name.to_owned(), i.to_owned()))
@@ -431,6 +435,26 @@ mod tests {
                 "  return fib(n - 2) + fib(n - 1);",
                 "}",
                 "print fib(6);",
+            ]));
+    }
+
+    #[test]
+    fn closure() {
+        assert_eq!(
+            "123",
+            printed_string(vec![
+                "fun get_counter() {",
+                "  var n = 0;",
+                "  fun counter() {",
+                "    n = n + 1;",
+                "    print n;",
+                "  }",
+                "  return counter;",
+                "}",
+                "var counter = get_counter();",
+                "counter();",
+                "counter();",
+                "counter();",
             ]));
     }
 }
