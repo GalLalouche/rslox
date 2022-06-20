@@ -15,7 +15,7 @@ use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityErr
 
 pub mod lox_value;
 mod result;
-mod environment;
+pub mod environment;
 
 pub fn interpret(program: &AnnotatedProgram) -> LoxResult<Option<LoxValue>> {
     convert_error(interpret_go(&program, &mut io::stdout()))
@@ -45,7 +45,7 @@ fn interpret_statement(
             Ok(None)
         }
         AnnotatedStatement::Function { name, params, body, .. } => {
-            let closure = Rc::new(RefCell::new(environment.new_nested()));
+            let closure = Rc::new(RefCell::new(environment.clone()));
             let callable = Callable {
                 arity: params.len(),
                 params: params.clone(),
@@ -102,7 +102,6 @@ fn interpret_statement(
 }
 
 // Changes from lox:
-// * Screw truthiness. Only Bools are truthy. But not for OR and AND, so this is probably a bug :\
 // * String comparisons using >, <, >=, <=.
 fn interpret_expr(
     environment: &mut Environment,
@@ -146,13 +145,13 @@ fn interpret_expr(
                     check_arity(arity)?;
                     let params_argument = &params;
                     let args = &arg_values;
-                    let mut nested = closure.deref().borrow_mut().new_nested();
+                    let mut env = closure.deref().borrow_mut().new_nested();
                     let result = try {
                         for (param_name, arg) in params_argument.into_iter().zip(args) {
-                            nested.define(param_name.to_owned(), arg.clone());
+                            env.define(param_name.to_owned(), arg.clone());
                         }
                         for stmt in body {
-                            interpret_statement(&mut nested, &stmt, writer)?;
+                            interpret_statement(&mut env, &stmt, writer)?;
                         }
                         Nil
                     };
@@ -161,8 +160,7 @@ fn interpret_expr(
                         e => e
                     }
                 }
-                e => Err(TypeError(
-                    format!("Cannot invoke uncallable value '{:?}'", e), *i))
+                e => Err(TypeError(format!("Cannot invoke uncallable value '{:?}'", e), *i))
             };
             result
         }
@@ -249,6 +247,14 @@ fn interpret_expr(
             let i_cond = interpret_expr(environment, cond, writer)?;
             interpret_expr(environment, if i_cond.truthiness() { e1 } else { e2 }, writer)
         }
+        AnnotatedExpression::ResolvedIdentifier(name, jumps, _) => {
+            Ok(environment.get_resolved(name, jumps).to_owned())
+        }
+        AnnotatedExpression::ResolvedAssignment(name, jumps, expr, _) => {
+            let value = interpret_expr(environment, expr, writer)?;
+            environment.resolved_assign(name, &value, jumps);
+            Ok(value)
+        }
     }
 }
 
@@ -280,24 +286,16 @@ fn binary_comparison(
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
-    use crate::rslox1::common::LoxError;
 
-    use crate::rslox1::lexer::tokenize;
-    use crate::rslox1::parser::parse;
+    use crate::rslox1::unsafe_test::unsafe_resolve;
 
     use super::*;
 
     fn printed_string(program: Vec<&str>) -> String {
-        let ast = parse(&tokenize(program.join("\n").as_ref()).unwrap()).unwrap();
+        let ast = unsafe_resolve(program);
         let mut buff = Cursor::new(Vec::new());
         interpret_go(&ast, &mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
-    }
-
-    fn error_line(program: Vec<&str>) -> usize {
-        let ast = parse(&tokenize(program.join("\n").as_ref()).unwrap()).unwrap();
-        let mut buff = Cursor::new(Vec::new());
-        interpret_go(&ast, &mut buff).unwrap_err().get_info().line
     }
 
     #[test]
@@ -319,16 +317,6 @@ mod tests {
                 "var x;",
                 "print x = 2;",
             ]));
-    }
-
-    #[test]
-    fn invalid_reference() {
-        assert_eq!(
-            1,
-            error_line(vec![
-                "print a;",
-                "var a = 5;",
-            ]))
     }
 
     #[test]
@@ -455,6 +443,47 @@ mod tests {
                 "counter();",
                 "counter();",
                 "counter();",
+            ]));
+    }
+
+    #[test]
+    fn closure2() {
+        assert_eq!(
+            "246",
+            printed_string(vec![
+                "fun get_counter() {",
+                "  var n = 0;",
+                "  fun counter1() {",
+                "    n = n + 1;",
+                "    print n;",
+                "  }",
+                "  fun counter2() {",
+                "    n = n + 1;",
+                "    return counter1();",
+                "  }",
+                "  return counter2;",
+                "}",
+                "var counter = get_counter();",
+                "counter();",
+                "counter();",
+                "counter();",
+            ]));
+    }
+
+    #[test]
+    fn resolutions() {
+        assert_eq!(
+            "globalglobal",
+            printed_string(vec![
+                r#"var a = "global";"#,
+                "{",
+                "  fun showA() {",
+                "    print a;",
+                "  }",
+                "  showA();",
+                r#"var a = "block";"#,
+                "  showA();",
+                "}",
             ]));
     }
 }

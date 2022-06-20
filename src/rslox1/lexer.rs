@@ -340,12 +340,13 @@ impl<F> CharTest for F where F: Fn(char) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::rslox1::unsafe_test::unsafe_tokenize;
     use super::*;
 
     #[test]
     fn test_identifier() {
         assert_eq!(
-            tokenize("x_y").expect("tokenize failed"),
+            unsafe_tokenize(vec!["x_y"]),
             vec!(Token::new(1, TokenType::identifier("x_y"))),
         )
     }
@@ -353,7 +354,7 @@ mod tests {
     #[test]
     fn test_basic_example() {
         assert_eq!(
-            tokenize("var x = \"language\";").expect("tokenize failed"),
+            unsafe_tokenize(vec!["var x = \"language\";"]),
             vec!(
                 Token::new(1, TokenType::Var),
                 Token::new(1, TokenType::identifier("x")),
@@ -367,7 +368,7 @@ mod tests {
     #[test]
     fn test_basic_expression() {
         assert_eq!(
-            tokenize("x + 42 > \"foo\"").expect("tokenize failed"),
+            unsafe_tokenize(vec!["x + 42 > \"foo\""]),
             vec!(
                 Token::new(1, TokenType::identifier("x")),
                 Token::new(1, TokenType::Plus),
@@ -381,7 +382,7 @@ mod tests {
     #[test]
     fn test_ternary() {
         assert_eq!(
-            tokenize("a ? b : c").expect("tokenize failed"),
+            unsafe_tokenize(vec!["a ? b : c"]),
             vec!(
                 Token::new(1, TokenType::identifier("a")),
                 Token::new(1, TokenType::Question),
@@ -395,7 +396,7 @@ mod tests {
     #[test]
     fn test_comments() {
         assert_eq!(
-            tokenize("42 / 54.13; // Right?\n var xyz /**/ = /*//*/ foobar;").expect("tokenize failed"),
+            unsafe_tokenize(vec!["42 / 54.13; // Right?\n var xyz /**/ = /*//*/ foobar;"]),
             vec!(
                 Token::new(1, TokenType::NumberLiteral(42.0)),
                 Token::new(1, TokenType::Slash),
@@ -413,7 +414,7 @@ mod tests {
     #[test]
     fn return_in_function() {
         assert_eq!(
-            tokenize("fun f(x) { return x+1; }").expect("tokenize failed"),
+            unsafe_tokenize(vec!["fun f(x) { return x+1; }"]),
             vec![
                 Token::new(1, TokenType::Fun),
                 Token::new(1, TokenType::identifier("f")),

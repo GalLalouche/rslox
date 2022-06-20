@@ -5,6 +5,10 @@ pub struct Program {
     pub statements: Vec<Statement>,
 }
 
+impl Program {
+    pub fn new(statements: Vec<Statement>) -> Self { Program { statements } }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Block(Vec<Statement>),
@@ -13,7 +17,7 @@ pub enum Statement {
     Variable(String, Expression),
     Function {
         name: String,
-        args: Vec<String>,
+        params: Vec<String>,
         body: Vec<Statement>,
     },
     Expression(Expression),
@@ -28,11 +32,13 @@ impl Statement {
     pub fn function(name: &str, args: Vec<&str>, body: Vec<Statement>) -> Self {
         Function {
             name: name.into(),
-            args: args.into_iter().map(|e| e.into()).collect(),
+            params: args.into_iter().map(|e| e.into()).collect(),
             body,
         }
     }
 }
+
+pub type ScopeJumps = usize;
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
@@ -43,6 +49,9 @@ pub enum Expression {
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
     Ternary(Box<Expression>, Box<Expression>, Box<Expression>),
     Atomic(Atom),
+    // Stupid hacks to avoid rewriting a new AST for this nonsense.
+    ResolvedIdentifier(String, ScopeJumps),
+    ResolvedAssignment(String, ScopeJumps, Box<Expression>),
 }
 
 impl Expression {
@@ -71,7 +80,7 @@ impl Expression {
                             .collect::<String>(),
                     ).as_ref()),
                 Expression::Assign(t, e) =>
-                    indent(format!("{:?} := (\n{})", t, aux(e, depth + 1)).as_ref()),
+                    indent(format!("{} := (\n{})", t, aux(e, depth + 1)).as_ref()),
                 Expression::Unary(op, e) =>
                     indent(format!("{}(\n{})", op.symbol(), aux(e, depth + 1)).as_ref()),
                 Expression::Binary(op, e1, e2) =>
@@ -88,10 +97,26 @@ impl Expression {
                                 aux(e1, depth + 1),
                                 aux(e2, depth + 1),
                         ).as_ref()),
+                Expression::ResolvedIdentifier(name, jumps) =>
+                    indent(format!("{} resolves {}", name, jumps).as_ref()),
+                Expression::ResolvedAssignment(name, jumps, expr) =>
+                    indent(format!(
+                        "{} resolved {} := (\n{})",
+                        name,
+                        jumps,
+                        aux(expr, depth + 1),
+                    ).as_ref()),
             }
         }
         aux(self, 0)
     }
+    pub fn identifier<S: Into<String>>(str: S) -> Self {
+        Expression::Atomic(Atom::Identifier(str.into()))
+    }
+    pub fn resolved_identifier<S: Into<String>>(str: S, scope_jumps: ScopeJumps) -> Self {
+        Expression::ResolvedIdentifier(str.into(), scope_jumps)
+    }
+    pub fn string<S: Into<String>>(str: S) -> Self { Expression::Atomic(Atom::String(str.into())) }
 }
 
 #[derive(Debug, PartialEq, Clone)]

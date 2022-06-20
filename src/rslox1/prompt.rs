@@ -5,6 +5,7 @@ use crate::rslox1::common::LoxResult;
 use crate::rslox1::interpreter::interpret;
 use crate::rslox1::lexer::tokenize;
 use crate::rslox1::parser::parse;
+use crate::rslox1::resolve::resolve;
 
 pub fn run_prompt() -> () {
     let stdin = io::stdin();
@@ -30,8 +31,9 @@ pub fn run(line: &str) -> LoxResult<()> {
 
 fn run_aux(line: &str, print_expr: bool) -> LoxResult<()> {
     let tokens = tokenize(line)?;
-    let expr = parse(&tokens)?;
-    if let Some(e) = interpret(&expr)? {
+    let program = parse(&tokens)?;
+    let resolved = resolve(&program)?;
+    if let Some(e) = interpret(&resolved)? {
         if print_expr {
             println!("{}", e.stringify());
         }

@@ -557,20 +557,17 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::borrow::Borrow;
-
     use crate::rslox1::ast::{Expression, Program, Statement};
     use crate::rslox1::ast::Atom::Number;
     use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Ternary, Unary};
     use crate::rslox1::ast::Statement::While;
     use crate::rslox1::lexer::tokenize;
+    use crate::rslox1::unsafe_test::unsafe_parse;
 
     use super::*;
 
-    fn parse_program(line: &str) -> Vec<Statement> {
-        let tokens = tokenize(line).unwrap();
-        let program: Program = parse(&tokens).unwrap().borrow().into();
-        program.statements
+    fn parse_program(program: Vec<&str>) -> Vec<Statement> {
+        Program::from(&unsafe_parse(program)).statements
     }
 
     fn parse_single_statement(line: &str) -> Statement {
@@ -597,7 +594,7 @@ mod tests {
                 Grouping(Box::new(
                     Binary(
                         BinaryOperator::Plus,
-                        Box::new(Atomic(Atom::identifier("x"))),
+                        Box::new(Expression::identifier("x")),
                         Box::new(Atomic(Number(3.0))),
                     )
                 ))
@@ -635,7 +632,7 @@ mod tests {
                     Binary(
                         BinaryOperator::Plus,
                         Box::new(Atomic(Number(1.0))),
-                        Box::new(Atomic(Atom::string("2"))),
+                        Box::new(Expression::string("2")),
                     )
                 ),
                 Box::new(Atomic(Number(3.0))),
@@ -653,19 +650,19 @@ mod tests {
                 Box::new(
                     Unary(
                         UnaryOperator::Minus,
-                        Box::new(Atomic(Atom::identifier("z"))),
+                        Box::new(Expression::identifier("z")),
                     )
                 ),
                 Box::new(Grouping(
                     Box::new(Ternary(
                         Box::new(Binary(
                             BinaryOperator::Greater,
-                            Box::new(Atomic(Atom::identifier("x"))),
+                            Box::new(Expression::identifier("x")),
                             Box::new(Atomic(Number(12.0))),
                         )),
                         Box::new(Binary(
                             BinaryOperator::Plus,
-                            Box::new(Atomic(Atom::identifier("x"))),
+                            Box::new(Expression::identifier("x")),
                             Box::new(Atomic(Number(2.0))),
                         )),
                         Box::new(Binary(
@@ -691,12 +688,12 @@ mod tests {
 
         let expected =
             Ternary(
-                Box::new(Atomic(Atom::identifier("a"))),
-                Box::new(Atomic(Atom::identifier("b"))),
+                Box::new(Expression::identifier("a")),
+                Box::new(Expression::identifier("b")),
                 Box::new(Ternary(
-                    Box::new(Atomic(Atom::identifier("c"))),
-                    Box::new(Atomic(Atom::identifier("d"))),
-                    Box::new(Atomic(Atom::identifier("e"))),
+                    Box::new(Expression::identifier("c")),
+                    Box::new(Expression::identifier("d")),
+                    Box::new(Expression::identifier("e")),
                 )),
             );
         assert_eq!(expr, expected);
@@ -718,8 +715,8 @@ mod tests {
         let expected = Statement::Print(
             Binary(
                 BinaryOperator::LessEqual,
-                Box::new(Atomic(Atom::identifier("x1"))),
-                Box::new(Atomic(Atom::identifier("x2"))),
+                Box::new(Expression::identifier("x1")),
+                Box::new(Expression::identifier("x2")),
             )
         );
         assert_eq!(stmt, expected);
@@ -732,8 +729,8 @@ mod tests {
             "z",
             Binary(
                 BinaryOperator::GreaterEqual,
-                Box::new(Atomic(Atom::identifier("x1"))),
-                Box::new(Atomic(Atom::identifier("x2"))),
+                Box::new(Expression::identifier("x1")),
+                Box::new(Expression::identifier("x2")),
             ),
         );
         assert_eq!(stmt, expected);
@@ -751,14 +748,16 @@ mod tests {
 
     #[test]
     fn variable_assignment() {
-        let prog = parse_program("var x = 1;\n x = \"foo\";");
+        let prog = parse_program(vec![
+            "var x = 1;",
+            r#"x = "foo";"#]);
         let expected =
             vec![
                 Statement::variable("x", Atomic(Number(1.0))),
                 Statement::Expression(
                     Expression::Assign(
                         "x".to_owned(),
-                        Box::new(Atomic(Atom::string("foo"))),
+                        Box::new(Expression::string("foo")),
                     ),
                 ),
             ];
@@ -802,10 +801,10 @@ mod tests {
         let expected = Statement::IfElse {
             cond: Binary(
                 BinaryOperator::Greater,
-                Box::new(Atomic(Atom::identifier("x"))),
+                Box::new(Expression::identifier("x")),
                 Box::new(Atomic(Number(2.0))),
             ),
-            if_stmt: Box::new(Statement::Print(Atomic(Atom::identifier("y")))),
+            if_stmt: Box::new(Statement::Print(Expression::identifier("y"))),
             else_stmt: None,
         };
         assert_eq!(statement, expected);
@@ -817,10 +816,10 @@ mod tests {
         let expected = Statement::IfElse {
             cond: Binary(
                 BinaryOperator::Greater,
-                Box::new(Atomic(Atom::identifier("x"))),
+                Box::new(Expression::identifier("x")),
                 Box::new(Atomic(Number(2.0))),
             ),
-            if_stmt: Box::new(Statement::Print(Atomic(Atom::identifier("y")))),
+            if_stmt: Box::new(Statement::Print(Expression::identifier("y"))),
             else_stmt: Some(Box::new(Statement::Block(
                 vec![
                     Statement::variable("z", Atomic(Atom::True)),
@@ -837,12 +836,12 @@ mod tests {
         let expr = parse_expression("a or b and c;");
         let expected = Binary(
             BinaryOperator::Or,
-            Box::new(Atomic(Atom::identifier("a"))),
+            Box::new(Expression::identifier("a")),
             Box::new(
                 Binary(
                     BinaryOperator::And,
-                    Box::new(Atomic(Atom::identifier("b"))),
-                    Box::new(Atomic(Atom::identifier("c"))),
+                    Box::new(Expression::identifier("b")),
+                    Box::new(Expression::identifier("c")),
                 ),
             ),
         );
@@ -863,11 +862,11 @@ mod tests {
     fn function_call_atomic() {
         let expr = parse_expression(r#"f(1, "foo", x);"#);
         let expected = FunctionCall(
-            Box::new(Atomic(Atom::identifier("f"))),
+            Box::new(Expression::identifier("f")),
             vec![
                 Atomic(Number(1.0)),
-                Atomic(Atom::string("foo")),
-                Atomic(Atom::identifier("x")),
+                Expression::string("foo"),
+                Expression::identifier("x"),
             ]);
         assert_eq!(expr, expected);
     }
@@ -876,16 +875,16 @@ mod tests {
     fn function_call_complex() {
         let expr = parse_expression(r#"f(g(), h(42) + z());"#);
         let expected = FunctionCall(
-            Box::new(Atomic(Atom::identifier("f"))),
+            Box::new(Expression::identifier("f")),
             vec![
-                FunctionCall(Box::new(Atomic(Atom::identifier("g"))), Vec::new()),
+                FunctionCall(Box::new(Expression::identifier("g")), Vec::new()),
                 Binary(
                     BinaryOperator::Plus,
                     Box::new(FunctionCall(
-                        Box::new(Atomic(Atom::identifier("h"))),
+                        Box::new(Expression::identifier("h")),
                         vec![Atomic(Number(42.0))],
                     )),
-                    Box::new(FunctionCall(Box::new(Atomic(Atom::identifier("z"))), Vec::new())),
+                    Box::new(FunctionCall(Box::new(Expression::identifier("z")), Vec::new())),
                 ),
             ]);
         assert_eq!(expr, expected);
@@ -896,8 +895,8 @@ mod tests {
         let stmt = parse_single_statement(r#"fun test() { print "hello world!"; }"#);
         let expected = Statement::Function {
             name: "test".to_owned(),
-            args: Vec::new(),
-            body: vec![Statement::Print(Atomic(Atom::string("hello world!")))],
+            params: Vec::new(),
+            body: vec![Statement::Print(Expression::string("hello world!"))],
         };
         assert_eq!(stmt, expected)
     }

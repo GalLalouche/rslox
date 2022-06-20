@@ -1,8 +1,10 @@
-pub mod annotated_ast;
-pub mod ast;
+mod annotated_ast;
+mod ast;
 pub mod common;
 pub mod interpreter;
-pub mod lexer;
-pub mod parser;
+mod lexer;
+mod parser;
 pub mod prompt;
 pub mod runfile;
+mod resolve;
+mod unsafe_test;

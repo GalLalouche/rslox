@@ -1,11 +1,17 @@
 use std::ops::Deref;
 
-use crate::rslox1::ast::{Atom, BinaryOperator, Expression, Program, Statement, UnaryOperator};
+use crate::rslox1::ast::{Atom, BinaryOperator, Expression, Program, ScopeJumps, Statement, UnaryOperator};
 use crate::rslox1::common::ErrorInfo;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AnnotatedProgram {
     pub statements: Vec<AnnotatedStatement>,
+}
+
+impl AnnotatedProgram{
+    pub fn new(statements: Vec<AnnotatedStatement>) -> Self {
+        AnnotatedProgram { statements }
+    }
 }
 
 impl From<&AnnotatedProgram> for Program {
@@ -52,7 +58,7 @@ impl From<&AnnotatedStatement> for Statement {
             AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.clone(), e.into()),
             AnnotatedStatement::Function { name, params: args, body, .. } => Statement::Function {
                 name: name.clone(),
-                args: args.clone(),
+                params: args.clone(),
                 body: body.into_iter().map(|e| e.into()).collect(),
             },
             AnnotatedStatement::Expression(e) => Statement::Expression(e.into()),
@@ -71,6 +77,8 @@ pub enum AnnotatedExpression {
     Unary(UnaryOperator, Box<AnnotatedExpression>, ErrorInfo),
     Binary(BinaryOperator, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
     Ternary(Box<AnnotatedExpression>, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
+    ResolvedIdentifier(String, ScopeJumps, ErrorInfo),
+    ResolvedAssignment(String, ScopeJumps, Box<AnnotatedExpression>, ErrorInfo),
 }
 
 impl AnnotatedExpression {
@@ -83,6 +91,8 @@ impl AnnotatedExpression {
             AnnotatedExpression::Unary(_, _, i) => i,
             AnnotatedExpression::Binary(_, _, _, i) => i,
             AnnotatedExpression::Ternary(_, _, _, i) => i,
+            AnnotatedExpression::ResolvedIdentifier(_, _, i) => i,
+            AnnotatedExpression::ResolvedAssignment(_, _, _, i) => i,
         })
     }
 }
@@ -114,6 +124,10 @@ impl From<&AnnotatedExpression> for Expression {
                     Box::new(e1.as_ref().into()),
                     Box::new(e2.as_ref().into()),
                 ),
+            AnnotatedExpression::ResolvedIdentifier(name, jumps, _) =>
+                Expression::ResolvedIdentifier(name.into(), *jumps),
+            AnnotatedExpression::ResolvedAssignment(name, jumps, expr, _) =>
+                Expression::ResolvedAssignment(name.into(), *jumps, Box::new(expr.as_ref().into())),
         }
     }
 }

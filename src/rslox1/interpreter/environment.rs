@@ -5,6 +5,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::time::SystemTime;
 
+use crate::rslox1::ast::ScopeJumps;
 use crate::rslox1::interpreter::lox_value::LoxValue;
 use crate::rslox1::interpreter::lox_value::LoxValue::{Native, Number};
 
@@ -49,6 +50,20 @@ impl Environment {
                     .find_map(|p| Environment::get_map(p, key))
             )
     }
+
+    pub fn get_resolved(&self, key: &str, jumps: &ScopeJumps) -> Ref<LoxValue> {
+        use std::borrow::Borrow;
+        assert!(jumps >= &0);
+        assert!(jumps <= &self.parents.len());
+        let map =
+            if jumps == &0 {
+                &self.values
+            } else {
+                self.parents.borrow().iter().nth(jumps - 1).unwrap()
+            };
+        Environment::get_map(&map, key).expect(
+            format!("Could not find key '{}' with scope jumps '{:?}'", key, jumps).as_ref())
+    }
     pub fn define(&mut self, key: String, value: LoxValue) {
         self.values.deref().borrow_mut().insert(key, value);
     }
@@ -58,6 +73,18 @@ impl Environment {
                 .iter()
                 .find(|p| Environment::assign_map(p, key, value))
                 .is_some()
+    }
+    pub fn resolved_assign(&mut self, key: &str, value: &LoxValue, jumps: &ScopeJumps) {
+        use std::borrow::{BorrowMut};
+        assert!(jumps >= &0);
+        let map =
+            if jumps == &0 {
+                &self.values
+            } else {
+                self.parents.borrow_mut().iter().nth(jumps - 1).unwrap()
+            };
+        let result = Environment::assign_map(&map, key, value);
+        assert!(result, "Could not find key '{}' with scope jumps '{:?}'", key, jumps)
     }
 
     fn get_map<'a>(
@@ -82,9 +109,21 @@ impl Display for Environment {
                 .deref()
                 .iter()
                 .map(|(k, v)| format!("{} -> {}", k, v.stringify()))
-                .intersperse("\t\n".to_owned())
+                .intersperse(",".into())
                 .collect();
-        write!(f, "{}", self_short)
+        let parents_short: String =
+            self.parents
+                .iter()
+                .map(|p| p
+                    .borrow()
+                    .iter()
+                    .map(|(k, v)| format!("{} -> {}", k, v.stringify()))
+                    .intersperse(",,".to_owned())
+                    .collect::<String>()
+                )
+                .intersperse(";;".into())
+                .collect();
+        write!(f, "{}\n{}", self_short, parents_short)
     }
 }
 
