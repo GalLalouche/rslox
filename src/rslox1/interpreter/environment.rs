@@ -1,6 +1,6 @@
 use std::cell::{Ref, RefCell};
 use std::collections::{HashMap, LinkedList};
-use std::fmt::{Display, Formatter};
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -11,7 +11,7 @@ use crate::rslox1::interpreter::lox_value::LoxValue::{Native, Number};
 
 type Map = Rc<RefCell<HashMap<String, LoxValue>>>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Environment {
     parents: LinkedList<Map>,
     values: Map,
@@ -101,7 +101,7 @@ impl Environment {
     }
 }
 
-impl Display for Environment {
+impl Debug for Environment {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let self_short: String =
             self.values
@@ -126,4 +126,3 @@ impl Display for Environment {
         write!(f, "{}\n{}", self_short, parents_short)
     }
 }
-
