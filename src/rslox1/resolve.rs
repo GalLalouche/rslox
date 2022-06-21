@@ -1,25 +1,25 @@
 use std::collections::{HashMap, LinkedList};
-use std::ops::Deref;
 
 use nonempty::NonEmpty;
 
-use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox1::ast::{Atom, ScopeJumps};
 use crate::rslox1::common::{convert_errors, ErrorInfo, LoxError, LoxResult};
 
-pub fn resolve(ae: &AnnotatedProgram) -> LoxResult<AnnotatedProgram> {
+pub fn resolve(ae: AnnotatedProgram) -> LoxResult<AnnotatedProgram> {
     convert_errors(resolve_go(ae))
 }
 
-fn resolve_go(ae: &AnnotatedProgram) -> Result<AnnotatedProgram, NonEmpty<ResolverError>> {
+fn resolve_go(ae: AnnotatedProgram) -> Result<AnnotatedProgram, NonEmpty<ResolverError>> {
     let mut resolver = Resolver::new();
     let mut errors = Vec::new();
+    let length = ae.statements.len();
     let result: Vec<_> = ae.statements
-        .iter()
+        .into_iter()
         .filter_map(|e| resolver.resolve_stmt(e).map_err(|e| errors.push(e)).ok())
         .collect();
     if errors.is_empty() {
-        assert_eq!(result.len(), ae.statements.len());
+        assert_eq!(result.len(), length);
         Ok(AnnotatedProgram { statements: result })
     } else {
         Err(NonEmpty::flatten(NonEmpty::from_vec(errors).unwrap()))
@@ -62,7 +62,7 @@ impl Resolver {
 
     pub fn resolve_stmt(
         &mut self,
-        stmt: &AnnotatedStatement,
+        stmt: AnnotatedStatement,
     ) -> Result<AnnotatedStatement, NonEmpty<ResolverError>> {
         match stmt {
             AnnotatedStatement::Block(stmts, i) => {
@@ -72,64 +72,68 @@ impl Resolver {
                     self.resolve_stmt(s).map(|s| result.push(s))?;
                 }
                 self.exit_scope();
-                Ok(AnnotatedStatement::Block(result, *i))
+                Ok(AnnotatedStatement::Block(result, i))
             }
             AnnotatedStatement::IfElse { cond, if_stmt, else_stmt, error_info } => {
                 let cond_ = self.resolve_expr(cond)?;
-                let if_ = self.resolve_stmt(if_stmt)?;
+                let if_ = self.resolve_stmt(*if_stmt)?;
                 let else_ = match else_stmt {
                     None => Ok(None),
-                    Some(e) =>
-                        self.resolve_stmt(e.deref()).map(|e| Some(Box::new(e))),
+                    Some(e) => self.resolve_stmt(*e).map(|e| Some(Box::new(e))),
                 }?;
                 Ok(AnnotatedStatement::IfElse {
                     cond: cond_,
                     if_stmt: Box::new(if_),
                     else_stmt: else_,
-                    error_info: *error_info,
+                    error_info,
                 })
             }
             AnnotatedStatement::While(cond, body, i) => {
                 let cond_ = self.resolve_expr(cond)?;
-                let body_ = self.resolve_stmt(body)?;
-                Ok(AnnotatedStatement::While(cond_, Box::new(body_), *i))
+                let body_ = self.resolve_stmt(*body)?;
+                Ok(AnnotatedStatement::While(cond_, Box::new(body_), i))
             }
             AnnotatedStatement::Variable(name, expr, i) => {
-                self.declare(name);
+                self.declare(name.as_ref());
                 let expr_ = self.resolve_expr(expr)?;
-                self.define(name);
-                Ok(AnnotatedStatement::Variable(name.into(), expr_, *i))
+                self.define(name.as_ref());
+                Ok(AnnotatedStatement::Variable(name.into(), expr_, i))
             }
-            AnnotatedStatement::Function { name, params, body, error_info } => {
-                self.declare(name);
-                self.define(name);
+            AnnotatedStatement::Class(name, funcs, i) => {
+                self.declare(name.as_ref());
+                self.define(name.as_ref());
+                Ok(AnnotatedStatement::Class(name, funcs, i))
+            }
+            AnnotatedStatement::Function(AnnotatedFunctionDef { name, params, body, error_info }) => {
+                self.declare(name.as_ref());
+                self.define(name.as_ref());
                 self.enter_scope();
-                for p in params {
-                    self.declare(p);
-                    self.define(p);
+                for p in &params {
+                    self.declare(p.as_ref());
+                    self.define(p.as_ref());
                 }
                 let mut result = Vec::new();
                 for s in body {
                     self.resolve_stmt(s).map(|s| result.push(s))?;
                 }
                 self.exit_scope();
-                Ok(AnnotatedStatement::Function {
-                    name: name.to_owned(),
-                    params: params.to_owned(),
+                Ok(AnnotatedStatement::Function(AnnotatedFunctionDef {
+                    name,
+                    params,
                     body: result,
-                    error_info: *error_info,
-                })
+                    error_info,
+                }))
             }
             AnnotatedStatement::Print(expr, i) => {
                 let expr_ = self.resolve_expr(expr)?;
-                Ok(AnnotatedStatement::Print(expr_, *i))
+                Ok(AnnotatedStatement::Print(expr_, i))
             }
             AnnotatedStatement::Return(expr, i) => {
                 match expr {
-                    None => Ok(AnnotatedStatement::Return(None, *i)),
+                    None => Ok(AnnotatedStatement::Return(None, i)),
                     Some(e) => {
                         let e_ = self.resolve_expr(e)?;
-                        Ok(AnnotatedStatement::Return(Some(e_), *i))
+                        Ok(AnnotatedStatement::Return(Some(e_), i))
                     }
                 }
             }
@@ -142,52 +146,55 @@ impl Resolver {
 
     fn resolve_expr(
         &mut self,
-        expr: &AnnotatedExpression,
+        expr: AnnotatedExpression,
     ) -> Result<AnnotatedExpression, NonEmpty<ResolverError>> {
         match expr {
             AnnotatedExpression::Atomic(Atom::Identifier(name), i) => {
-                self.count_jumps(name, i)
+                self.count_jumps(name.as_ref(), &i)
                     .map(|j| {
-                        AnnotatedExpression::ResolvedIdentifier(name.to_owned(), j, *i)
+                        AnnotatedExpression::ResolvedIdentifier(name, j, i)
                     }).map_err(|e| NonEmpty::new(e))
             }
             e @ AnnotatedExpression::Atomic(_, _) => Ok(e.clone()),
             AnnotatedExpression::ResolvedIdentifier(..) => panic!("This should not have happened"),
             AnnotatedExpression::ResolvedAssignment(..) => panic!("This should not have happened"),
-            AnnotatedExpression::Grouping(e, i) => {
-                let e_ = self.resolve_expr(e)?;
-                Ok(AnnotatedExpression::Grouping(Box::new(e_), *i))
+            AnnotatedExpression::Grouping(mut e, i) => {
+                // TODO macro?
+                *e = self.resolve_expr(*e)?;
+                Ok(AnnotatedExpression::Grouping(e, i))
             }
-            AnnotatedExpression::FunctionCall(callee, args, i) => {
-                let callee_ = self.resolve_expr(callee)?;
+            AnnotatedExpression::Property(mut expr, name, i) => {
+                *expr = self.resolve_expr(*expr)?;
+                Ok(AnnotatedExpression::Property(expr, name, i))
+            }
+            AnnotatedExpression::FunctionCall(mut callee, args, i) => {
+                *callee = self.resolve_expr(*callee)?;
                 let mut args_ = Vec::new();
                 for arg in args {
                     self.resolve_expr(arg).map(|e| args_.push(e))?;
                 }
-                Ok(AnnotatedExpression::FunctionCall(Box::new(callee_), args_, *i))
+                Ok(AnnotatedExpression::FunctionCall(callee, args_, i))
             }
-            AnnotatedExpression::Assign(name, expr, i) => {
-                let expr_ = self.resolve_expr(expr)?;
-                self.count_jumps(name, i)
-                    .map(|j| {
-                        AnnotatedExpression::ResolvedAssignment(
-                            name.to_owned(), j, Box::new(expr_), *i)
-                    }).map_err(|e| NonEmpty::new(e))
+            AnnotatedExpression::Assign(name, mut expr, i) => {
+                *expr = self.resolve_expr(*expr)?;
+                self.count_jumps(&name, &i)
+                    .map(|j| AnnotatedExpression::ResolvedAssignment(name, j, expr, i))
+                    .map_err(|e| NonEmpty::new(e))
             }
-            AnnotatedExpression::Unary(op, expr, i) => {
-                let expr_ = self.resolve_expr(expr)?;
-                Ok(AnnotatedExpression::Unary(*op, Box::new(expr_), *i))
+            AnnotatedExpression::Unary(op, mut expr, i) => {
+                *expr = self.resolve_expr(*expr)?;
+                Ok(AnnotatedExpression::Unary(op, expr, i))
             }
-            AnnotatedExpression::Binary(op, e1, e2, i) => {
-                let e1_ = self.resolve_expr(e1)?;
-                let e2_ = self.resolve_expr(e2)?;
-                Ok(AnnotatedExpression::Binary(*op, Box::new(e1_), Box::new(e2_), *i))
+            AnnotatedExpression::Binary(op, mut e1, mut e2, i) => {
+                *e1 = self.resolve_expr(*e1)?;
+                *e2 = self.resolve_expr(*e2)?;
+                Ok(AnnotatedExpression::Binary(op, e1, e2, i))
             }
-            AnnotatedExpression::Ternary(cond, e1, e2, i) => {
-                let cond_ = self.resolve_expr(cond)?;
-                let e1_ = self.resolve_expr(e1)?;
-                let e2_ = self.resolve_expr(e2)?;
-                Ok(AnnotatedExpression::Ternary(Box::new(cond_), Box::new(e1_), Box::new(e2_), *i))
+            AnnotatedExpression::Ternary(mut cond, mut e1, mut e2, i) => {
+                *cond = self.resolve_expr(*cond)?;
+                *e1 = self.resolve_expr(*e1)?;
+                *e2 = self.resolve_expr(*e2)?;
+                Ok(AnnotatedExpression::Ternary(cond, e1, e2, i))
             }
         }
     }
@@ -225,7 +232,7 @@ impl Resolver {
 mod tests {
     use std::borrow::Borrow;
 
-    use crate::rslox1::ast::{Expression, Program, Statement};
+    use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
     use crate::rslox1::resolve::ResolverError::Unresolved;
     use crate::rslox1::unsafe_test::{unsafe_parse, unsafe_resolve};
 
@@ -277,11 +284,11 @@ mod tests {
                 vec![
                     Statement::variable("a", Expression::string("global")),
                     Statement::Block(vec![
-                        Statement::Function {
+                        Statement::Function(FunctionDef {
                             name: "showA".into(),
                             params: Vec::new(),
                             body: vec![Statement::Print(Expression::resolved_identifier("a", 2))],
-                        },
+                        }),
                         Statement::Expression(Expression::FunctionCall(
                             Box::new(Expression::resolved_identifier("showA", 0)),
                             Vec::new(),
@@ -299,7 +306,7 @@ mod tests {
 
     fn error_line(program: Vec<&str>) -> ResolverError {
         let ast = unsafe_parse(program);
-        resolve_go(&ast).unwrap_err().head
+        resolve_go(ast).unwrap_err().head
     }
 
     #[test]

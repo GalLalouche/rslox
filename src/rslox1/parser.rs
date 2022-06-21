@@ -1,6 +1,6 @@
 use nonempty::NonEmpty;
 
-use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox1::annotated_ast::AnnotatedExpression::{Assign, Atomic};
 use crate::rslox1::annotated_ast::AnnotatedStatement::{Block, Function, Return, Variable};
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
@@ -78,9 +78,23 @@ impl<'a> Parser<'a> {
                 }
                 self.consume(TokenType::CloseBrace, None).unwrap();
                 Ok(Block(statements, i))
-            }).unwrap_or_else(|| self.if_statement())
+            }).unwrap_or_else(|| self.class_statement())
     }
 
+    fn class_statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
+        self.matches_single(TokenType::Class)
+            .map(|i| {
+                let name = self.identifier()?;
+                self.consume(TokenType::OpenBrace, None)?;
+                let mut methods = Vec::new();
+                while self.peek_type() != &TokenType::CloseBrace {
+                    let i = self.peek().error_info();
+                    self.function(i).map(|f| methods.push(f))?;
+                }
+                self.consume(TokenType::CloseBrace, None)?;
+                Ok(AnnotatedStatement::Class(name, methods, i))
+            }).unwrap_or_else(|| self.if_statement())
+    }
     fn if_statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
         self.matches_single(TokenType::If)
             .map(|i| {
@@ -160,19 +174,19 @@ impl<'a> Parser<'a> {
                         while_stmt
                     }
                 )
-            }).unwrap_or_else(|| self.function_declaration())
+            }).unwrap_or_else(|| self.function_statement())
     }
 
-    fn function_declaration(&mut self) -> Result<AnnotatedStatement, ParserError> {
+    fn function_statement(&mut self) -> Result<AnnotatedStatement, ParserError> {
         if self.peek_type() == &TokenType::Fun {
             let i = self.advance().error_info();
-            self.function(i)
+            self.function(i).map(Function)
         } else {
             self.variable_declaration()
         }
     }
 
-    fn function(&mut self, error_info: ErrorInfo) -> Result<AnnotatedStatement, ParserError> {
+    fn function(&mut self, error_info: ErrorInfo) -> Result<AnnotatedFunctionDef, ParserError> {
         let name = self.identifier()?;
         self.consume(TokenType::OpenParen, None)?;
         let mut args = Vec::new();
@@ -189,7 +203,7 @@ impl<'a> Parser<'a> {
             self.statement().map(|s| body.push(s))?;
         }
         self.consume(TokenType::CloseBrace, None)?;
-        Ok(Function {
+        Ok(AnnotatedFunctionDef {
             name,
             params: args,
             body,
@@ -384,6 +398,10 @@ impl<'a> Parser<'a> {
                 }
                 self.consume(TokenType::CloseParen, None)?;
                 expr = Ok(AnnotatedExpression::FunctionCall(Box::new(expr), args, i))?;
+            } else if self.peek_type() == &TokenType::Dot {
+                let i = self.consume(TokenType::Dot, None).unwrap();
+                let id = self.identifier()?;
+                expr = Ok(AnnotatedExpression::Property(Box::new(expr), id, i))?;
             } else {
                 break;
             }
@@ -557,9 +575,9 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::rslox1::ast::{Expression, Program, Statement};
+    use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
     use crate::rslox1::ast::Atom::Number;
-    use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Ternary, Unary};
+    use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Property, Ternary, Unary};
     use crate::rslox1::ast::Statement::While;
     use crate::rslox1::lexer::tokenize;
     use crate::rslox1::unsafe_test::unsafe_parse;
@@ -893,11 +911,82 @@ mod tests {
     #[test]
     fn function_declaration_simple() {
         let stmt = parse_single_statement(r#"fun test() { print "hello world!"; }"#);
-        let expected = Statement::Function {
+        let expected = Statement::Function(FunctionDef {
             name: "test".to_owned(),
             params: Vec::new(),
             body: vec![Statement::Print(Expression::string("hello world!"))],
-        };
+        });
         assert_eq!(stmt, expected)
+    }
+
+    #[test]
+    fn trivial_class() {
+        let stmt = parse_single_statement("class Foo {}");
+        assert_eq!(stmt, Statement::class("Foo", Vec::new()))
+    }
+
+    #[test]
+    fn class_with_methods() {
+        let stmt = parse_single_statement("class Foo {\nbar(x) {\nprint x;\n}\n}");
+        assert_eq!(stmt, Statement::class(
+            "Foo",
+            vec![
+                FunctionDef {
+                    name: "bar".to_owned(),
+                    params: vec!["x".into()],
+                    body: vec![
+                        Statement::Print(Expression::identifier("x")),
+                    ],
+                },
+            ]))
+    }
+
+    #[test]
+    fn trivial_constructor() {
+        assert_eq!(
+            parse_program(vec![
+                "class Foo {}",
+                "var foo = Foo();",
+            ]),
+            vec![
+                Statement::class("Foo", Vec::new()),
+                Statement::variable(
+                    "foo",
+                    FunctionCall(
+                        Box::new(Expression::identifier("Foo")),
+                        Vec::new(),
+                    ),
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn trivial_property() {
+        assert_eq!(
+            parse_expression("x.y;"),
+            Property(Box::new(Expression::identifier("x")), "y".to_owned()),
+        )
+    }
+
+    #[test]
+    fn complex_property() {
+        assert_eq!(
+            parse_expression("a.b(3).c(d);"),
+            FunctionCall(
+                Box::new(
+                    Property(
+                        Box::new(FunctionCall(
+                            Box::new(Property(
+                                Box::new(Expression::identifier("a")),
+                                "b".to_owned(),
+                            )),
+                            vec![Atomic(Number(3.0))],
+                        )),
+                        "c".to_owned(),
+                    )),
+                vec![Expression::identifier("d")],
+            ),
+        )
     }
 }

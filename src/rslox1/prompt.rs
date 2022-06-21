@@ -32,7 +32,7 @@ pub fn run(line: &str) -> LoxResult<()> {
 fn run_aux(line: &str, print_expr: bool) -> LoxResult<()> {
     let tokens = tokenize(line)?;
     let program = parse(&tokens)?;
-    let resolved = resolve(&program)?;
+    let resolved = resolve(program)?;
     if let Some(e) = interpret(&resolved)? {
         if print_expr {
             println!("{}", e.stringify());

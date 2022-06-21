@@ -4,11 +4,12 @@ use std::io::Write;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
 use crate::rslox1::common::{convert_error, ErrorInfo, LoxResult};
 use crate::rslox1::interpreter::environment::Environment;
-use crate::rslox1::interpreter::lox_value::LoxValue;
+use crate::rslox1::interpreter::lox_value::{LoxClass, LoxFunction, LoxValue};
+use crate::rslox1::interpreter::lox_value::LoxValue::Class;
 use crate::rslox1::interpreter::LoxValue::{Bool, Callable, Native, Nil, Number};
 use crate::rslox1::interpreter::result::{binary_type_error, InterpreterErrorOrControlFlow, InterpretResult, unary_type_error};
 use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UnrecognizedIdentifier};
@@ -44,12 +45,22 @@ fn interpret_statement(
             environment.define(name.to_owned(), expr);
             Ok(None)
         }
-        AnnotatedStatement::Function { name, params, body, .. } => {
+        AnnotatedStatement::Class(name, _, _) => {
+            let closure = Rc::new(RefCell::new(environment.clone()));
+            environment.define(
+                name.to_owned(),
+                Class(LoxClass { name: name.to_owned(), closure, funcs: Vec::new() }),
+            );
+            Ok(None)
+        }
+        AnnotatedStatement::Function(AnnotatedFunctionDef { name, params, body, .. }) => {
             let closure = Rc::new(RefCell::new(environment.clone()));
             let callable = Callable {
-                arity: params.len(),
-                params: params.clone(),
-                body: body.clone(),
+                func: LoxFunction {
+                    arity: params.len(),
+                    params: params.clone(),
+                    body: body.clone(),
+                },
                 closure,
             };
             environment.define(name.to_owned(), callable);
@@ -123,6 +134,7 @@ fn interpret_expr(
             Atom::Nil => Ok(Nil),
         },
         AnnotatedExpression::Grouping(e, _) => interpret_expr(environment, e, writer),
+        AnnotatedExpression::Property(..) => todo!(),
         AnnotatedExpression::FunctionCall(f, args, i) => {
             let check_arity = |arity| {
                 if arity == args.len() {
@@ -141,7 +153,7 @@ fn interpret_expr(
                     check_arity(arity)?;
                     func(arg_values)
                 }
-                Callable { arity, params, body, closure } => {
+                Callable { func: LoxFunction { arity, params, body }, closure } => {
                     check_arity(arity)?;
                     let params_argument = &params;
                     let args = &arg_values;
@@ -159,6 +171,9 @@ fn interpret_expr(
                         Err(Returned(value, _)) => Ok(value),
                         e => e
                     }
+                }
+                Class(class) => {
+                    Ok(LoxValue::instance(class))
                 }
                 e => Err(TypeError(format!("Cannot invoke uncallable value '{:?}'", e), *i))
             };
@@ -485,5 +500,40 @@ mod tests {
                 "  showA();",
                 "}",
             ]));
+    }
+
+    #[test]
+    fn print_class_name() {
+        assert_eq!(
+            "Foo",
+            printed_string(vec![
+                "class Foo {}",
+                "print Foo;",
+            ]),
+        )
+    }
+
+    #[test]
+    fn trivial_constructor() {
+        assert_eq!(
+            "Foo instance",
+            printed_string(vec![
+                "class Foo {}",
+                "var foo = Foo();",
+                "print foo;",
+            ]),
+        )
+    }
+
+    #[test]
+    fn trivial_property() {
+        assert_eq!(
+            "nil",
+            printed_string(vec![
+                "class Foo {}",
+                "var foo = Foo();",
+                "print foo.x;",
+            ]),
+        )
     }
 }

@@ -10,16 +10,20 @@ impl Program {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct FunctionDef {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Vec<Statement>,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum Statement {
     Block(Vec<Statement>),
+    Class(String, Vec<FunctionDef>),
     IfElse { cond: Expression, if_stmt: Box<Statement>, else_stmt: Option<Box<Statement>> },
     While(Expression, Box<Statement>),
     Variable(String, Expression),
-    Function {
-        name: String,
-        params: Vec<String>,
-        body: Vec<Statement>,
-    },
+    Function(FunctionDef),
     Expression(Expression),
     Print(Expression),
     Return(Option<Expression>),
@@ -29,12 +33,15 @@ impl Statement {
     pub fn variable<S: Into<String>>(str: S, expr: Expression) -> Self {
         Statement::Variable(str.into(), expr)
     }
-    pub fn function(name: &str, args: Vec<&str>, body: Vec<Statement>) -> Self {
-        Function {
+    pub fn class<S: Into<String>>(name: S, args: Vec<FunctionDef>) -> Self {
+        Statement::Class(name.into(), args)
+    }
+    pub fn function<S: Into<String>>(name: S, args: Vec<&str>, body: Vec<Statement>) -> Self {
+        Function(FunctionDef {
             name: name.into(),
             params: args.into_iter().map(|e| e.into()).collect(),
             body,
-        }
+        })
     }
 }
 
@@ -43,6 +50,7 @@ pub type ScopeJumps = usize;
 #[derive(Debug, PartialEq, Clone)]
 pub enum Expression {
     Grouping(Box<Expression>),
+    Property(Box<Expression>, String),
     Assign(String, Box<Expression>),
     FunctionCall(Box<Expression>, Vec<Expression>),
     Unary(UnaryOperator, Box<Expression>),
@@ -70,6 +78,8 @@ impl Expression {
                     Atom::Nil => indent("nil"),
                 }
                 Expression::Grouping(e) => indent(format!("(\n{})", aux(e, depth + 1)).as_ref()),
+                Expression::Property(e, name) =>
+                    indent(format!("({}.{})", aux(e, depth), name).as_ref()),
                 Expression::FunctionCall(f, args) =>
                     indent(format!(
                         "{}(\n{})",

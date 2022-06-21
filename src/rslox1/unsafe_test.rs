@@ -19,5 +19,5 @@ pub fn unsafe_parse(program: Vec<&str>) -> AnnotatedProgram {
 
 #[cfg(test)]
 pub fn unsafe_resolve(program: Vec<&str>) -> AnnotatedProgram {
-    resolve(&unsafe_parse(program)).expect("Failed to resolve")
+    resolve(unsafe_parse(program)).expect("Failed to resolve")
 }

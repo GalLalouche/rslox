@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use crate::rslox1::ast::{Atom, BinaryOperator, Expression, Program, ScopeJumps, Statement, UnaryOperator};
+use crate::rslox1::ast::{Atom, BinaryOperator, Expression, FunctionDef, Program, ScopeJumps, Statement, UnaryOperator};
 use crate::rslox1::common::ErrorInfo;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -8,7 +8,7 @@ pub struct AnnotatedProgram {
     pub statements: Vec<AnnotatedStatement>,
 }
 
-impl AnnotatedProgram{
+impl AnnotatedProgram {
     pub fn new(statements: Vec<AnnotatedStatement>) -> Self {
         AnnotatedProgram { statements }
     }
@@ -21,8 +21,17 @@ impl From<&AnnotatedProgram> for Program {
 }
 
 #[derive(Debug, PartialEq, Clone)]
+pub struct AnnotatedFunctionDef {
+    pub name: String,
+    pub params: Vec<String>,
+    pub body: Vec<AnnotatedStatement>,
+    pub error_info: ErrorInfo,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 pub enum AnnotatedStatement {
     Block(Vec<AnnotatedStatement>, ErrorInfo),
+    Class(String, Vec<AnnotatedFunctionDef>, ErrorInfo),
     IfElse {
         cond: AnnotatedExpression,
         if_stmt: Box<AnnotatedStatement>,
@@ -31,15 +40,22 @@ pub enum AnnotatedStatement {
     },
     While(AnnotatedExpression, Box<AnnotatedStatement>, ErrorInfo),
     Variable(String, AnnotatedExpression, ErrorInfo),
-    Function {
-        name: String,
-        params: Vec<String>,
-        body: Vec<AnnotatedStatement>,
-        error_info: ErrorInfo,
-    },
+    Function(AnnotatedFunctionDef),
     Print(AnnotatedExpression, ErrorInfo),
     Return(Option<AnnotatedExpression>, ErrorInfo),
     Expression(AnnotatedExpression),
+}
+
+impl From<&AnnotatedFunctionDef> for FunctionDef {
+    fn from(f: &AnnotatedFunctionDef) -> Self {
+        match f {
+            AnnotatedFunctionDef { name, params, body, .. } => FunctionDef {
+                name: name.clone(),
+                params: params.clone(),
+                body: body.into_iter().map(|e| e.into()).collect(),
+            }
+        }
+    }
 }
 
 impl From<&AnnotatedStatement> for Statement {
@@ -47,6 +63,8 @@ impl From<&AnnotatedStatement> for Statement {
         match ae {
             AnnotatedStatement::Block(ss, _) =>
                 Statement::Block(ss.into_iter().map(|e| e.into()).collect()),
+            AnnotatedStatement::Class(name, funcs, _) =>
+                Statement::Class(name.to_owned(), funcs.iter().map(|e| e.into()).collect()),
             AnnotatedStatement::IfElse { cond, if_stmt, else_stmt, .. } =>
                 Statement::IfElse {
                     cond: cond.into(),
@@ -56,11 +74,7 @@ impl From<&AnnotatedStatement> for Statement {
             AnnotatedStatement::While(cond, stmt, _) =>
                 Statement::While(cond.into(), Box::new(stmt.as_ref().into())),
             AnnotatedStatement::Variable(n, e, _) => Statement::Variable(n.clone(), e.into()),
-            AnnotatedStatement::Function { name, params: args, body, .. } => Statement::Function {
-                name: name.clone(),
-                params: args.clone(),
-                body: body.into_iter().map(|e| e.into()).collect(),
-            },
+            AnnotatedStatement::Function(f) => Statement::Function(f.into()),
             AnnotatedStatement::Expression(e) => Statement::Expression(e.into()),
             AnnotatedStatement::Return(o, _) => Statement::Return(o.as_ref().map(|e| e.into())),
             AnnotatedStatement::Print(p, _) => Statement::Print(p.into()),
@@ -72,6 +86,7 @@ impl From<&AnnotatedStatement> for Statement {
 pub enum AnnotatedExpression {
     Atomic(Atom, ErrorInfo),
     Grouping(Box<AnnotatedExpression>, ErrorInfo),
+    Property(Box<AnnotatedExpression>, String, ErrorInfo),
     FunctionCall(Box<AnnotatedExpression>, Vec<AnnotatedExpression>, ErrorInfo),
     Assign(String, Box<AnnotatedExpression>, ErrorInfo),
     Unary(UnaryOperator, Box<AnnotatedExpression>, ErrorInfo),
@@ -86,6 +101,7 @@ impl AnnotatedExpression {
         *(match self {
             AnnotatedExpression::Atomic(_, i) => i,
             AnnotatedExpression::Grouping(_, i) => i,
+            AnnotatedExpression::Property(_, _, i) => i,
             AnnotatedExpression::FunctionCall(_, _, i) => i,
             AnnotatedExpression::Assign(_, _, i) => i,
             AnnotatedExpression::Unary(_, _, i) => i,
@@ -103,6 +119,8 @@ impl From<&AnnotatedExpression> for Expression {
             AnnotatedExpression::Atomic(e, _) => Expression::Atomic(e.to_owned()),
             AnnotatedExpression::Grouping(e, _) =>
                 Expression::Grouping(Box::new(e.as_ref().into())),
+            AnnotatedExpression::Property(e, n, _) =>
+                Expression::Property(Box::new(e.as_ref().into()), n.to_owned()),
             AnnotatedExpression::FunctionCall(f, args, _) =>
                 Expression::FunctionCall(
                     Box::new(f.as_ref().into()),
