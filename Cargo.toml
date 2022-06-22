@@ -5,3 +5,4 @@ edition = "2018"
 
 [dependencies]
 nonempty = "0.7.0"
+either = "1.5.2"

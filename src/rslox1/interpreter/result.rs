@@ -1,17 +1,18 @@
 use crate::rslox1::ast::{BinaryOperator, UnaryOperator};
 use crate::rslox1::common::{ErrorInfo, LoxError};
-use crate::rslox1::interpreter::lox_value::LoxValue;
-use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UnrecognizedIdentifier};
+use crate::rslox1::interpreter::lox_value::{LoxRef, LoxValue};
+use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UndefinedProperty, UnrecognizedIdentifier};
 
 #[derive(Debug, Clone)]
 pub enum InterpreterErrorOrControlFlow {
     UnrecognizedIdentifier(String, ErrorInfo),
+    UndefinedProperty(String, ErrorInfo),
     ArityError { expected: usize, actual: usize, error_info: ErrorInfo },
     TypeError(String, ErrorInfo),
     NilReference(ErrorInfo),
 
     // Not actual errors
-    Returned(LoxValue, ErrorInfo),
+    Returned(LoxRef, ErrorInfo),
 }
 
 impl LoxError for InterpreterErrorOrControlFlow {
@@ -22,6 +23,7 @@ impl LoxError for InterpreterErrorOrControlFlow {
             NilReference(i) => *i,
             ArityError { error_info, .. } => *error_info,
             Returned(_, i) => *i,
+            UndefinedProperty(_, i) => *i,
         }
     }
 
@@ -30,6 +32,7 @@ impl LoxError for InterpreterErrorOrControlFlow {
             ArityError { actual, expected, .. } =>
                 format!("Incorrect callable arity: expected '{}', but got '{}'", expected, actual),
             UnrecognizedIdentifier(m, _) => format!("Unrecognized identifier: {}", m),
+            UndefinedProperty(n, _) => format!("Unrecognized property: {}", n),
             TypeError(m, _) => format!("Type error: {}", m),
             NilReference(_) => "Nil reference".to_owned(),
             Returned(..) => "Return outside of function".to_owned(),

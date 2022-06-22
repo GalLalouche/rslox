@@ -1,12 +1,12 @@
-use std::cell::RefCell;
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::rc::Rc;
 
 use crate::rslox1::annotated_ast::AnnotatedStatement;
 use crate::rslox1::interpreter::environment::Environment;
 use crate::rslox1::interpreter::lox_value::LoxValue::{Bool, Callable, Class, Instance, Native, Nil, Number};
 use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow;
+use crate::rslox1::utils::RcRc;
 
 #[derive(Debug, Clone)]
 pub struct LoxFunction {
@@ -22,7 +22,8 @@ pub struct LoxClass {
     pub funcs: Vec<LoxFunction>,
 }
 
-type Closure = Rc<RefCell<Environment>>;
+type Closure = RcRc<Environment>;
+pub type LoxRef = RcRc<LoxValue>;
 
 #[derive(Debug, Clone)]
 pub enum LoxValue {
@@ -39,11 +40,11 @@ pub enum LoxValue {
     Native {
         name: &'static str,
         arity: usize,
-        func: fn(Vec<LoxValue>) -> Result<LoxValue, InterpreterErrorOrControlFlow>,
+        func: fn(Vec<LoxRef>) -> Result<LoxRef, InterpreterErrorOrControlFlow>,
     },
     Class(LoxClass),
     Instance {
-        state: HashMap<String, LoxValue>,
+        state: HashMap<String, LoxRef>,
         name: String,
     },
     Number(f64),
@@ -61,8 +62,8 @@ impl LoxValue {
     ) -> Self { Callable { func: LoxFunction { arity, params, body }, closure } }
 
     pub fn instance(
-        class: LoxClass,
-    ) -> Self { Instance { name: class.name, state: HashMap::new() } }
+        class: &LoxClass,
+    ) -> Self { Instance { name: class.borrow().name.to_owned(), state: HashMap::new() } }
 
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -109,6 +110,15 @@ impl LoxValue {
             (Bool(b1), Bool(b2)) => Bool(b1 == b2),
             (Nil, Nil) => Bool(true),
             _ => Bool(false),
+        }
+    }
+
+    pub fn set(&mut self, name: &str, value: &LoxRef) -> Result<LoxValue, String> {
+        if let Instance {state, ..} = self {
+            state.insert(name.to_owned(), value.clone());
+            Ok(Nil)
+        } else {
+            Err(format!("Cannot set field on non-instance type {:?}", self))
         }
     }
 }

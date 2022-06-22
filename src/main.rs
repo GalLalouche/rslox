@@ -1,6 +1,8 @@
 #![feature(iter_intersperse)]
 #![feature(option_result_contains)]
+#![feature(result_cloned)]
 #![feature(try_blocks)]
+
 
 use std::env;
 

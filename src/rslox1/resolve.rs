@@ -181,6 +181,11 @@ impl Resolver {
                     .map(|j| AnnotatedExpression::ResolvedAssignment(name, j, expr, i))
                     .map_err(|e| NonEmpty::new(e))
             }
+            AnnotatedExpression::Set(mut g, name, mut expr, i) => {
+                *expr = self.resolve_expr(*expr)?;
+                *g = self.resolve_expr(*g)?;
+                Ok(AnnotatedExpression::Set(g, name, expr, i))
+            }
             AnnotatedExpression::Unary(op, mut expr, i) => {
                 *expr = self.resolve_expr(*expr)?;
                 Ok(AnnotatedExpression::Unary(op, expr, i))

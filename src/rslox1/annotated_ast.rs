@@ -89,6 +89,7 @@ pub enum AnnotatedExpression {
     Property(Box<AnnotatedExpression>, String, ErrorInfo),
     FunctionCall(Box<AnnotatedExpression>, Vec<AnnotatedExpression>, ErrorInfo),
     Assign(String, Box<AnnotatedExpression>, ErrorInfo),
+    Set(Box<AnnotatedExpression>, String, Box<AnnotatedExpression>, ErrorInfo),
     Unary(UnaryOperator, Box<AnnotatedExpression>, ErrorInfo),
     Binary(BinaryOperator, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
     Ternary(Box<AnnotatedExpression>, Box<AnnotatedExpression>, Box<AnnotatedExpression>, ErrorInfo),
@@ -104,6 +105,7 @@ impl AnnotatedExpression {
             AnnotatedExpression::Property(_, _, i) => i,
             AnnotatedExpression::FunctionCall(_, _, i) => i,
             AnnotatedExpression::Assign(_, _, i) => i,
+            AnnotatedExpression::Set(_, _, _, i) => i,
             AnnotatedExpression::Unary(_, _, i) => i,
             AnnotatedExpression::Binary(_, _, _, i) => i,
             AnnotatedExpression::Ternary(_, _, _, i) => i,
@@ -128,6 +130,11 @@ impl From<&AnnotatedExpression> for Expression {
                 ),
             AnnotatedExpression::Assign(n, e, _) =>
                 Expression::Assign(n.to_owned(), Box::new(e.as_ref().into())),
+            AnnotatedExpression::Set(g, n, e, _) => Expression::Set(
+                Box::new(g.as_ref().into()),
+                n.to_owned(),
+                Box::new(e.as_ref().into()),
+            ),
             AnnotatedExpression::Unary(op, e, _) =>
                 Expression::Unary(*op, Box::new(e.as_ref().into())),
             AnnotatedExpression::Binary(op, e1, e2, _) =>

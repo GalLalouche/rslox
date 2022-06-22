@@ -52,6 +52,7 @@ pub enum Expression {
     Grouping(Box<Expression>),
     Property(Box<Expression>, String),
     Assign(String, Box<Expression>),
+    Set(Box<Expression>, String, Box<Expression>),
     FunctionCall(Box<Expression>, Vec<Expression>),
     Unary(UnaryOperator, Box<Expression>),
     Binary(BinaryOperator, Box<Expression>, Box<Expression>),
@@ -91,6 +92,8 @@ impl Expression {
                     ).as_ref()),
                 Expression::Assign(t, e) =>
                     indent(format!("{} := (\n{})", t, aux(e, depth + 1)).as_ref()),
+                Expression::Set(g, t, e) =>
+                    indent(format!("{}.{} := (\n{})", aux(g, depth), t, aux(e, depth + 1)).as_ref()),
                 Expression::Unary(op, e) =>
                     indent(format!("{}(\n{})", op.symbol(), aux(e, depth + 1)).as_ref()),
                 Expression::Binary(op, e1, e2) =>

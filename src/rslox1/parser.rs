@@ -1,7 +1,7 @@
 use nonempty::NonEmpty;
 
 use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
-use crate::rslox1::annotated_ast::AnnotatedExpression::{Assign, Atomic};
+use crate::rslox1::annotated_ast::AnnotatedExpression::{Assign, Atomic, Property, Set};
 use crate::rslox1::annotated_ast::AnnotatedStatement::{Block, Function, Return, Variable};
 use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
 use crate::rslox1::common;
@@ -274,6 +274,8 @@ impl<'a> Parser<'a> {
                 match &expr {
                     Atomic(Atom::Identifier(name), _) => Ok(
                         Assign(name.clone(), Box::new(value), next.error_info())),
+                    Property(expr, name, _) => Ok(
+                        Set(expr.to_owned(), name.clone(), Box::new(value), next.error_info())),
                     e => Err(ParserError {
                         message: format!("Invalid assignment r-value {:?}", e),
                         token: next,
@@ -401,7 +403,7 @@ impl<'a> Parser<'a> {
             } else if self.peek_type() == &TokenType::Dot {
                 let i = self.consume(TokenType::Dot, None).unwrap();
                 let id = self.identifier()?;
-                expr = Ok(AnnotatedExpression::Property(Box::new(expr), id, i))?;
+                expr = Ok(Property(Box::new(expr), id, i))?;
             } else {
                 break;
             }
@@ -577,7 +579,7 @@ impl<'a> Parser<'a> {
 mod tests {
     use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
     use crate::rslox1::ast::Atom::Number;
-    use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Property, Ternary, Unary};
+    use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Property, Set, Ternary, Unary};
     use crate::rslox1::ast::Statement::While;
     use crate::rslox1::lexer::tokenize;
     use crate::rslox1::unsafe_test::unsafe_parse;
@@ -966,6 +968,18 @@ mod tests {
         assert_eq!(
             parse_expression("x.y;"),
             Property(Box::new(Expression::identifier("x")), "y".to_owned()),
+        )
+    }
+
+    #[test]
+    fn trivial_property_assignment() {
+        assert_eq!(
+            parse_expression("x.y = z;"),
+            Set(
+                Box::new(Expression::identifier("x")),
+                "y".to_owned(),
+                Box::new(Expression::identifier("z")),
+            )
         )
     }
 
