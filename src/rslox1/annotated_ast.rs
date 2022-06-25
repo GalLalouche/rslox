@@ -121,8 +121,7 @@ impl From<&AnnotatedExpression> for Expression {
             AnnotatedExpression::Atomic(e, _) => Expression::Atomic(e.to_owned()),
             AnnotatedExpression::Grouping(e, _) =>
                 Expression::Grouping(Box::new(e.as_ref().into())),
-            AnnotatedExpression::Property(e, n, _) =>
-                Expression::Property(Box::new(e.as_ref().into()), n.to_owned()),
+            AnnotatedExpression::Property(e, n, _) => Expression::property(e.as_ref().into(), n),
             AnnotatedExpression::FunctionCall(f, args, _) =>
                 Expression::FunctionCall(
                     Box::new(f.as_ref().into()),

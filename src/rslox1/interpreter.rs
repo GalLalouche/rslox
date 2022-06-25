@@ -44,29 +44,21 @@ fn interpret_statement(
             environment.define(name.to_owned(), expr);
             Ok(None)
         }
-        AnnotatedStatement::Class(name, _, _) => {
+        AnnotatedStatement::Class(name, funcs, _) => {
             let closure = rcrc(environment.clone());
             environment.define(
                 name.to_owned(),
-                rcrc(Class(LoxClass {
+                rcrc(Class(rcrc(LoxClass {
                     name: name.to_owned(),
                     closure,
-                    funcs: Vec::new(),
-                })),
+                    funcs: funcs.iter().map(|f| (f.name.to_owned(), rcrc(function(f)))).collect(),
+                }))),
             );
             Ok(None)
         }
-        AnnotatedStatement::Function(AnnotatedFunctionDef { name, params, body, .. }) => {
+        AnnotatedStatement::Function(f @ AnnotatedFunctionDef { name, .. }) => {
             let closure = rcrc(environment.clone());
-            let callable = Callable {
-                func: LoxFunction {
-                    arity: params.len(),
-                    params: params.clone(),
-                    body: body.clone(),
-                },
-                closure,
-            };
-            environment.define(name.to_owned(), rcrc(callable));
+            environment.define(name.to_owned(), rcrc(Callable { func: function(f), closure }));
             Ok(None)
         }
         AnnotatedStatement::IfElse { cond, if_stmt, else_stmt, .. } => {
@@ -117,6 +109,18 @@ fn interpret_statement(
     }
 }
 
+fn function(func: &AnnotatedFunctionDef) -> LoxFunction {
+    match func {
+        AnnotatedFunctionDef { params, body, .. } => {
+            LoxFunction {
+                arity: params.len(),
+                params: params.clone(),
+                body: body.clone(),
+            }
+        }
+    }
+}
+
 // Changes from lox:
 // * String comparisons using >, <, >=, <=.
 fn interpret_expr(
@@ -135,14 +139,16 @@ fn interpret_expr(
             Atom::True => Ok(rcrc(Bool(true))),
             Atom::False => Ok(rcrc(Bool(false))),
             Atom::Nil => Ok(rcrc(Nil)),
+            Atom::This => todo!(),
         },
         AnnotatedExpression::Grouping(e, _) => interpret_expr(environment, e, writer),
         AnnotatedExpression::Property(e, name, i) => {
             let expr = interpret_expr(environment, e, writer)?;
             match &*expr.clone().borrow() {
-                LoxValue::Instance { state, .. } =>
-                    state.get(name).ok_or(UndefinedProperty(name.to_owned(), *i)).cloned(),
-
+                LoxValue::Instance { instance } =>
+                    instance.get(name)
+                        .ok_or(UndefinedProperty(name.to_owned(), *i))
+                        .map(|e| e.clone()),
                 e => Err(TypeError(format!("Cannot access non-instance expression {:?}", e), *i))
             }
         }
@@ -185,7 +191,7 @@ fn interpret_expr(
                         _ => panic!(),
                     }
                 }
-                Class(class) => Ok(rcrc(LoxValue::instance(class))),
+                Class(class) => Ok(rcrc(LoxValue::instance(class.clone()))),
                 e => Err(TypeError(format!("Cannot invoke uncallable value '{:?}'", e), *i))
             };
             result
@@ -551,6 +557,22 @@ mod tests {
                 "foo.x = 42;",
                 "print foo.x;",
             ]),
+        )
+    }
+
+    #[test]
+    fn simple_method() {
+        assert_eq!(
+            printed_string(vec![
+                "class Foo {",
+                "  foo() {",
+                "    print 42;",
+                "  }",
+                "}",
+                "var foo = Foo();",
+                "foo.foo();",
+            ]),
+            "42",
         )
     }
 }

@@ -1,4 +1,3 @@
-use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Debug;
 
@@ -6,7 +5,7 @@ use crate::rslox1::annotated_ast::AnnotatedStatement;
 use crate::rslox1::interpreter::environment::Environment;
 use crate::rslox1::interpreter::lox_value::LoxValue::{Bool, Callable, Class, Instance, Native, Nil, Number};
 use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow;
-use crate::rslox1::utils::RcRc;
+use crate::rslox1::utils::{RcRc, rcrc};
 
 #[derive(Debug, Clone)]
 pub struct LoxFunction {
@@ -19,11 +18,32 @@ pub struct LoxFunction {
 pub struct LoxClass {
     pub name: String,
     pub closure: Closure,
-    pub funcs: Vec<LoxFunction>,
+    pub funcs: HashMap<String, RcRc<LoxFunction>>,
 }
 
 type Closure = RcRc<Environment>;
 pub type LoxRef = RcRc<LoxValue>;
+
+#[derive(Debug, Clone)]
+pub struct LoxInstance {
+    fields: HashMap<String, LoxRef>,
+    class: RcRc<LoxClass>,
+}
+
+impl LoxInstance {
+    pub fn new(class: RcRc<LoxClass>) -> Self {
+        LoxInstance { fields: HashMap::new(), class }
+    }
+    pub fn set_field(&mut self, name: String, value: LoxRef) {
+        self.fields.insert(name, value);
+    }
+    pub fn get(&self, name: &str) -> Option<LoxRef> {
+        self.fields.get(name).cloned().or_else(|| self.class.borrow().funcs.get(name).map(|f| rcrc(Callable {
+            closure: self.class.borrow().closure.clone(),
+            func: f.borrow().clone(),
+        })))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum LoxValue {
@@ -42,10 +62,9 @@ pub enum LoxValue {
         arity: usize,
         func: fn(Vec<LoxRef>) -> Result<LoxRef, InterpreterErrorOrControlFlow>,
     },
-    Class(LoxClass),
+    Class(RcRc<LoxClass>),
     Instance {
-        state: HashMap<String, LoxRef>,
-        name: String,
+        instance: LoxInstance,
     },
     Number(f64),
     String(String),
@@ -62,8 +81,8 @@ impl LoxValue {
     ) -> Self { Callable { func: LoxFunction { arity, params, body }, closure } }
 
     pub fn instance(
-        class: &LoxClass,
-    ) -> Self { Instance { name: class.borrow().name.to_owned(), state: HashMap::new() } }
+        class: RcRc<LoxClass>,
+    ) -> Self { Instance { instance: LoxInstance::new(class) } }
 
     pub fn type_name(&self) -> &'static str {
         match self {
@@ -86,8 +105,8 @@ impl LoxValue {
             LoxValue::String(s) => s.replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\"),
             Bool(b) => b.to_string(),
             Nil => "nil".to_owned(),
-            Class(LoxClass { name, .. }) => name.to_owned(),
-            Instance { name, .. } => format!("{} instance", name),
+            Class(cls) => cls.borrow().name.to_owned(),
+            Instance { instance } => format!("{} instance", instance.class.borrow().name),
         }
     }
 
@@ -114,8 +133,8 @@ impl LoxValue {
     }
 
     pub fn set(&mut self, name: &str, value: &LoxRef) -> Result<LoxValue, String> {
-        if let Instance {state, ..} = self {
-            state.insert(name.to_owned(), value.clone());
+        if let Instance { instance } = self {
+            instance.set_field(name.to_owned(), value.clone());
             Ok(Nil)
         } else {
             Err(format!("Cannot set field on non-instance type {:?}", self))

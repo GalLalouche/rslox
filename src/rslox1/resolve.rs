@@ -30,6 +30,7 @@ fn resolve_go(ae: AnnotatedProgram) -> Result<AnnotatedProgram, NonEmpty<Resolve
 enum ResolverError {
     Unresolved(String, ErrorInfo),
     SelfReference(String, ErrorInfo),
+    InvalidReturn(ErrorInfo),
 }
 
 impl LoxError for ResolverError {
@@ -37,23 +38,35 @@ impl LoxError for ResolverError {
         match self {
             ResolverError::Unresolved(_, i) => *i,
             ResolverError::SelfReference(_, i) => *i,
+            ResolverError::InvalidReturn(i) => *i,
         }
     }
     fn get_message(&self) -> String {
         match self {
             ResolverError::Unresolved(name, _) => format!("Unresolved {}", name),
             ResolverError::SelfReference(name, _) => format!("Self reference {}", name),
+            ResolverError::InvalidReturn(_) => "Invalid return".to_owned(),
         }
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum CurrentFunction {
+    Function,
+    Method,
+}
+
 struct Resolver {
     scopes: LinkedList<HashMap<String, bool>>,
+    function_scope: LinkedList<CurrentFunction>,
 }
 
 impl Resolver {
     pub fn new() -> Self {
-        let mut result = Resolver { scopes: LinkedList::new() };
+        let mut result = Resolver {
+            scopes: LinkedList::new(),
+            function_scope: LinkedList::new(),
+        };
         result.enter_scope(); // Global scope
         result.declare("clock");
         result.define("clock");
@@ -105,6 +118,7 @@ impl Resolver {
                 Ok(AnnotatedStatement::Class(name, funcs, i))
             }
             AnnotatedStatement::Function(AnnotatedFunctionDef { name, params, body, error_info }) => {
+                self.function_scope.push_front(CurrentFunction::Function);
                 self.declare(name.as_ref());
                 self.define(name.as_ref());
                 self.enter_scope();
@@ -117,6 +131,7 @@ impl Resolver {
                     self.resolve_stmt(s).map(|s| result.push(s))?;
                 }
                 self.exit_scope();
+                self.function_scope.pop_front();
                 Ok(AnnotatedStatement::Function(AnnotatedFunctionDef {
                     name,
                     params,
@@ -129,11 +144,15 @@ impl Resolver {
                 Ok(AnnotatedStatement::Print(expr_, i))
             }
             AnnotatedStatement::Return(expr, i) => {
-                match expr {
-                    None => Ok(AnnotatedStatement::Return(None, i)),
-                    Some(e) => {
-                        let e_ = self.resolve_expr(e)?;
-                        Ok(AnnotatedStatement::Return(Some(e_), i))
+                if self.function_scope.is_empty() {
+                    Err(NonEmpty::new(ResolverError::InvalidReturn(i)))
+                } else {
+                    match expr {
+                        None => Ok(AnnotatedStatement::Return(None, i)),
+                        Some(e) => {
+                            let e_ = self.resolve_expr(e)?;
+                            Ok(AnnotatedStatement::Return(Some(e_), i))
+                        }
                     }
                 }
             }
@@ -238,7 +257,7 @@ mod tests {
     use std::borrow::Borrow;
 
     use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
-    use crate::rslox1::resolve::ResolverError::Unresolved;
+    use crate::rslox1::resolve::ResolverError::{InvalidReturn, Unresolved};
     use crate::rslox1::unsafe_test::{unsafe_parse, unsafe_resolve};
 
     use super::*;
@@ -321,6 +340,16 @@ mod tests {
             error_line(vec![
                 "print a;",
                 "var a = 5;",
+            ]))
+    }
+
+    #[test]
+    fn return_outside_of_function_is_an_error() {
+        assert_eq!(
+            InvalidReturn(ErrorInfo { line: 2 }),
+            error_line(vec![
+                "var a = 5;",
+                "return a;",
             ]))
     }
 }

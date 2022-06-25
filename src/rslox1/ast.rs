@@ -77,6 +77,7 @@ impl Expression {
                     Atom::True => indent("true"),
                     Atom::False => indent("false"),
                     Atom::Nil => indent("nil"),
+                    Atom::This => indent("this"),
                 }
                 Expression::Grouping(e) => indent(format!("(\n{})", aux(e, depth + 1)).as_ref()),
                 Expression::Property(e, name) =>
@@ -130,6 +131,9 @@ impl Expression {
         Expression::ResolvedIdentifier(str.into(), scope_jumps)
     }
     pub fn string<S: Into<String>>(str: S) -> Self { Expression::Atomic(Atom::String(str.into())) }
+    pub fn property<S: Into<String>>(expr: Expression, str: S) -> Self {
+        Expression::Property(Box::new(expr), str.into())
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -140,6 +144,7 @@ pub enum Atom {
     True,
     False,
     Nil,
+    This,
 }
 
 impl Atom {

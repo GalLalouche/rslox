@@ -418,6 +418,7 @@ impl<'a> Parser<'a> {
             TokenType::False => Some(Atom::False),
             TokenType::True => Some(Atom::True),
             TokenType::Nil => Some(Atom::Nil),
+            TokenType::This => Some(Atom::This),
             TokenType::StringLiteral(literal) => Some(Atom::string(literal)),
             TokenType::NumberLiteral(literal) => Some(Atom::Number(*literal)),
             TokenType::Identifier(name) => Some(Atom::identifier(name)),
@@ -580,7 +581,7 @@ mod tests {
     use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
     use crate::rslox1::ast::Atom::Number;
     use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Property, Set, Ternary, Unary};
-    use crate::rslox1::ast::Statement::While;
+    use crate::rslox1::ast::Statement::{Class, While};
     use crate::rslox1::lexer::tokenize;
     use crate::rslox1::unsafe_test::unsafe_parse;
 
@@ -967,7 +968,7 @@ mod tests {
     fn trivial_property() {
         assert_eq!(
             parse_expression("x.y;"),
-            Property(Box::new(Expression::identifier("x")), "y".to_owned()),
+            Expression::property(Expression::identifier("x"), "y"),
         )
     }
 
@@ -989,17 +990,42 @@ mod tests {
             parse_expression("a.b(3).c(d);"),
             FunctionCall(
                 Box::new(
-                    Property(
-                        Box::new(FunctionCall(
-                            Box::new(Property(
-                                Box::new(Expression::identifier("a")),
-                                "b".to_owned(),
+                    Expression::property(
+                        FunctionCall(
+                            Box::new(Expression::property(
+                                Expression::identifier("a"),
+                                "b",
                             )),
                             vec![Atomic(Number(3.0))],
-                        )),
+                        ),
                         "c".to_owned(),
                     )),
                 vec![Expression::identifier("d")],
+            ),
+        )
+    }
+
+    #[test]
+    fn simple_method() {
+        assert_eq!(
+            parse_single_statement("class Foo {\nfoo(x)\n{\nprint x + this.y;\n}\n}"),
+            Class(
+                "Foo".to_owned(),
+                vec![
+                    FunctionDef {
+                        name: "foo".to_owned(),
+                        params: vec!["x".into()],
+                        body: vec![
+                            Statement::Print(
+                                Binary(
+                                    BinaryOperator::Plus,
+                                    Box::new(Expression::identifier("x")),
+                                    Box::new(Expression::property(Atomic(Atom::This), "y")),
+                                ),
+                            )
+                        ],
+                    },
+                ],
             ),
         )
     }
