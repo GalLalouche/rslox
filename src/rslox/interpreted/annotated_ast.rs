@@ -1,7 +1,7 @@
 use std::ops::Deref;
 
-use crate::rslox1::ast::{Atom, BinaryOperator, Expression, FunctionDef, Program, ScopeJumps, Statement, UnaryOperator};
-use crate::rslox1::common::ErrorInfo;
+use crate::rslox::interpreted::ast::{Atom, BinaryOperator, Expression, FunctionDef, Program, ScopeJumps, Statement, UnaryOperator};
+use crate::rslox::common::error::ErrorInfo;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct AnnotatedProgram {

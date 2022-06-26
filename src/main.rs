@@ -1,15 +1,14 @@
 #![feature(iter_intersperse)]
 #![feature(option_result_contains)]
-#![feature(result_cloned)]
 #![feature(try_blocks)]
 
 
 use std::env;
+use rslox::interpreted::prompt::run_prompt;
 
-use crate::rslox1::prompt::run_prompt;
-use crate::rslox1::runfile::run_file;
+use rslox::interpreted::runfile::run_file;
 
-pub mod rslox1;
+pub mod rslox;
 
 fn main() {
     let args: Vec<String> = env::args().collect();

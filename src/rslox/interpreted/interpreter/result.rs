@@ -1,7 +1,7 @@
-use crate::rslox1::ast::{BinaryOperator, UnaryOperator};
-use crate::rslox1::common::{ErrorInfo, LoxError};
-use crate::rslox1::interpreter::lox_value::{LoxRef, LoxValue};
-use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UndefinedProperty, UnrecognizedIdentifier};
+use crate::rslox::common::error::{ErrorInfo, LoxError};
+use crate::rslox::interpreted::ast::{BinaryOperator, UnaryOperator};
+use crate::rslox::interpreted::interpreter::lox_value::{LoxRef, LoxValue};
+use crate::rslox::interpreted::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UndefinedProperty, UnrecognizedIdentifier};
 
 #[derive(Debug, Clone)]
 pub enum InterpreterErrorOrControlFlow {

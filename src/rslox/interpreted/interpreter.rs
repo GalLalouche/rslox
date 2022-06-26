@@ -2,16 +2,15 @@ use std::io;
 use std::io::Write;
 use std::ops::Deref;
 
-use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
-use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
-use crate::rslox1::common::{convert_error, ErrorInfo, LoxResult};
-use crate::rslox1::interpreter::environment::Environment;
-use crate::rslox1::interpreter::lox_value::{LoxClass, LoxFunction, LoxRef, LoxValue};
-use crate::rslox1::interpreter::lox_value::LoxValue::Class;
-use crate::rslox1::interpreter::LoxValue::{Bool, Callable, Native, Nil, Number};
-use crate::rslox1::interpreter::result::{binary_type_error, InterpreterErrorOrControlFlow, InterpretResult, unary_type_error};
-use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UndefinedProperty, UnrecognizedIdentifier};
-use crate::rslox1::utils::rcrc;
+use crate::rslox::common::error::{convert_error, ErrorInfo, LoxResult};
+use crate::rslox::common::utils::rcrc;
+use crate::rslox::interpreted::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox::interpreted::ast::{Atom, BinaryOperator, UnaryOperator};
+use crate::rslox::interpreted::interpreter::environment::Environment;
+use crate::rslox::interpreted::interpreter::lox_value::{LoxClass, LoxFunction, LoxRef, LoxValue};
+use crate::rslox::interpreted::interpreter::LoxValue::{Bool, Callable, Native, Nil, Number};
+use crate::rslox::interpreted::interpreter::result::{binary_type_error, InterpreterErrorOrControlFlow, InterpretResult, unary_type_error};
+use crate::rslox::interpreted::interpreter::result::InterpreterErrorOrControlFlow::{ArityError, NilReference, Returned, TypeError, UndefinedProperty, UnrecognizedIdentifier};
 
 pub mod lox_value;
 mod result;
@@ -48,7 +47,7 @@ fn interpret_statement(
             let closure = rcrc(environment.clone());
             environment.define(
                 name.to_owned(),
-                rcrc(Class(rcrc(LoxClass {
+                rcrc(LoxValue::Class(rcrc(LoxClass {
                     name: name.to_owned(),
                     closure,
                     funcs: funcs.iter().map(|f| (f.name.to_owned(), rcrc(function(f)))).collect(),
@@ -191,7 +190,7 @@ fn interpret_expr(
                         _ => panic!(),
                     }
                 }
-                Class(class) => Ok(rcrc(LoxValue::instance(class.clone()))),
+                LoxValue::Class(class) => Ok(rcrc(LoxValue::instance(class.clone()))),
                 e => Err(TypeError(format!("Cannot invoke uncallable value '{:?}'", e), *i))
             };
             result
@@ -324,7 +323,7 @@ fn binary_comparison(
 mod tests {
     use std::io::Cursor;
 
-    use crate::rslox1::unsafe_test::unsafe_resolve;
+    use crate::rslox::interpreted::tests::unsafe_resolve;
 
     use super::*;
 

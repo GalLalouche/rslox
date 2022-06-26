@@ -1,12 +1,11 @@
 use nonempty::NonEmpty;
 
-use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
-use crate::rslox1::annotated_ast::AnnotatedExpression::{Assign, Atomic, Property, Set};
-use crate::rslox1::annotated_ast::AnnotatedStatement::{Block, Function, Return, Variable};
-use crate::rslox1::ast::{Atom, BinaryOperator, UnaryOperator};
-use crate::rslox1::common;
-use crate::rslox1::common::{ErrorInfo, LoxError, LoxResult};
-use crate::rslox1::lexer::{Token, TokenType};
+use crate::rslox::common::error::{convert_errors, ErrorInfo, LoxError, LoxResult};
+use crate::rslox::common::lexer::{Token, TokenType};
+use crate::rslox::interpreted::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox::interpreted::annotated_ast::AnnotatedExpression::{Assign, Atomic, Property, Set};
+use crate::rslox::interpreted::annotated_ast::AnnotatedStatement::{Block, Function, Return, Variable};
+use crate::rslox::interpreted::ast::{Atom, BinaryOperator, UnaryOperator};
 
 #[derive(Debug)]
 struct Parser<'a> {
@@ -38,7 +37,7 @@ impl LoxError for ParserError {
 }
 
 pub fn parse(tokens: &Vec<Token>) -> LoxResult<AnnotatedProgram> {
-    common::convert_errors(Parser::parse(tokens))
+    convert_errors(Parser::parse(tokens))
 }
 
 type ParserResult<A> = Result<A, NonEmpty<ParserError>>;
@@ -578,12 +577,12 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod tests {
-    use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
-    use crate::rslox1::ast::Atom::Number;
-    use crate::rslox1::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Property, Set, Ternary, Unary};
-    use crate::rslox1::ast::Statement::{Class, While};
-    use crate::rslox1::lexer::tokenize;
-    use crate::rslox1::unsafe_test::unsafe_parse;
+    use crate::rslox::common::lexer::tokenize;
+    use crate::rslox::interpreted::ast::{Expression, FunctionDef, Program, Statement};
+    use crate::rslox::interpreted::ast::Atom::Number;
+    use crate::rslox::interpreted::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Set, Ternary, Unary};
+    use crate::rslox::interpreted::ast::Statement::{Class, While};
+    use crate::rslox::interpreted::tests::unsafe_parse;
 
     use super::*;
 

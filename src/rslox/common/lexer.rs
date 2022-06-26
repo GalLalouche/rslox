@@ -1,11 +1,11 @@
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
-use crate::rslox1::common;
-use crate::rslox1::common::{ErrorInfo, LoxError, LoxResult};
+use crate::rslox::common;
+use crate::rslox::common::error::{ErrorInfo, LoxError, LoxResult};
 
 pub fn tokenize(source: &str) -> LoxResult<Vec<Token>> {
-    common::convert_error(Lexer::new(source).get_lexems())
+    common::error::convert_error(Lexer::new(source).get_lexems())
 }
 
 
@@ -340,7 +340,7 @@ impl<F> CharTest for F where F: Fn(char) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use crate::rslox1::unsafe_test::unsafe_tokenize;
+    use crate::rslox::common::tests::unsafe_tokenize;
     use super::*;
 
     #[test]

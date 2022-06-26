@@ -1,11 +1,11 @@
 use std::io;
 use std::io::BufRead;
 
-use crate::rslox1::common::LoxResult;
-use crate::rslox1::interpreter::interpret;
-use crate::rslox1::lexer::tokenize;
-use crate::rslox1::parser::parse;
-use crate::rslox1::resolve::resolve;
+use crate::rslox::common::error::LoxResult;
+use crate::rslox::common::lexer::tokenize;
+use crate::rslox::interpreted::interpreter::interpret;
+use crate::rslox::interpreted::parser::parse;
+use crate::rslox::interpreted::resolve::resolve;
 
 pub fn run_prompt() -> () {
     let stdin = io::stdin();

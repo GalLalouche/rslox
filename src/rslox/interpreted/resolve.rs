@@ -2,9 +2,9 @@ use std::collections::{HashMap, LinkedList};
 
 use nonempty::NonEmpty;
 
-use crate::rslox1::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
-use crate::rslox1::ast::{Atom, ScopeJumps};
-use crate::rslox1::common::{convert_errors, ErrorInfo, LoxError, LoxResult};
+use crate::rslox::common::error::{convert_errors, ErrorInfo, LoxError, LoxResult};
+use crate::rslox::interpreted::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
+use crate::rslox::interpreted::ast::{Atom, ScopeJumps};
 
 pub fn resolve(ae: AnnotatedProgram) -> LoxResult<AnnotatedProgram> {
     convert_errors(resolve_go(ae))
@@ -256,9 +256,9 @@ impl Resolver {
 mod tests {
     use std::borrow::Borrow;
 
-    use crate::rslox1::ast::{Expression, FunctionDef, Program, Statement};
-    use crate::rslox1::resolve::ResolverError::{InvalidReturn, Unresolved};
-    use crate::rslox1::unsafe_test::{unsafe_parse, unsafe_resolve};
+    use crate::rslox::interpreted::ast::{Expression, FunctionDef, Program, Statement};
+    use crate::rslox::interpreted::resolve::ResolverError::{InvalidReturn, Unresolved};
+    use crate::rslox::interpreted::tests::{unsafe_parse, unsafe_resolve};
 
     use super::*;
 

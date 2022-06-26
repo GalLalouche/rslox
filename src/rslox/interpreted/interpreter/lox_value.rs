@@ -1,11 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
 
-use crate::rslox1::annotated_ast::AnnotatedStatement;
-use crate::rslox1::interpreter::environment::Environment;
-use crate::rslox1::interpreter::lox_value::LoxValue::{Bool, Callable, Class, Instance, Native, Nil, Number};
-use crate::rslox1::interpreter::result::InterpreterErrorOrControlFlow;
-use crate::rslox1::utils::{RcRc, rcrc};
+use crate::rslox::common::utils::{RcRc, rcrc};
+use crate::rslox::interpreted::annotated_ast::AnnotatedStatement;
+use crate::rslox::interpreted::interpreter::environment::Environment;
+use crate::rslox::interpreted::interpreter::lox_value::LoxValue::{Bool, Callable, Class, Instance, Native, Nil, Number};
+use crate::rslox::interpreted::interpreter::result::InterpreterErrorOrControlFlow;
 
 #[derive(Debug, Clone)]
 pub struct LoxFunction {

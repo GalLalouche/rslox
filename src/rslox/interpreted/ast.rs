@@ -1,4 +1,4 @@
-use crate::rslox1::ast::Statement::Function;
+use crate::rslox::interpreted::ast::Statement::Function;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Program {

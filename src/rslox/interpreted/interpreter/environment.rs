@@ -3,10 +3,10 @@ use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::time::SystemTime;
 
-use crate::rslox1::ast::ScopeJumps;
-use crate::rslox1::interpreter::lox_value::{LoxRef, LoxValue};
-use crate::rslox1::interpreter::lox_value::LoxValue::{Native, Number};
-use crate::rslox1::utils::{rcrc, RcRc};
+use crate::rslox::common::utils::{rcrc, RcRc};
+use crate::rslox::interpreted::ast::ScopeJumps;
+use crate::rslox::interpreted::interpreter::lox_value::{LoxRef, LoxValue};
+use crate::rslox::interpreted::interpreter::lox_value::LoxValue::{Native, Number};
 
 type Map = RcRc<HashMap<String, LoxRef>>;
 
