@@ -1,5 +1,6 @@
 use std::fmt::Debug;
 use nonempty::NonEmpty;
+use crate::rslox::common::lexer::Token;
 
 pub trait LoxError: Debug {
     fn get_info(&self) -> ErrorInfo;
@@ -23,4 +24,26 @@ pub fn convert_errors<A, E: LoxError + 'static>(result: Result<A, NonEmpty<E>>) 
 
 pub fn convert_error<A, E: LoxError + 'static>(result: Result<A, E>) -> LoxResult<A> {
     convert_errors(result.map_err(|e| NonEmpty::new(e)))
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct ParserError {
+    pub message: String,
+    pub token: Token,
+}
+
+impl ParserError {
+    pub fn new<S: Into<String>>(message: S, token: Token) -> Self {
+        ParserError { message: message.into(), token }
+    }
+}
+
+impl LoxError for ParserError {
+    fn get_info(&self) -> ErrorInfo {
+        ErrorInfo { line: self.token.line }
+    }
+
+    fn get_message(&self) -> String {
+        self.message.to_owned()
+    }
 }

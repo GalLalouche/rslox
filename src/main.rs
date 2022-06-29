@@ -2,10 +2,13 @@
 #![feature(option_result_contains)]
 #![feature(try_blocks)]
 
+#[macro_use]
+extern crate num_derive;
+extern crate num_traits;
 
 use std::env;
-use rslox::interpreted::prompt::run_prompt;
 
+use rslox::interpreted::prompt::run_prompt;
 use rslox::interpreted::runfile::run_file;
 
 pub mod rslox;

@@ -6,8 +6,9 @@ enum InterpretResult {
     RuntimeError,
 }
 
-struct VirtualMachine {
-    chunk: Chunk,
+#[derive(Debug)]
+struct VirtualMachine<'a> {
+    chunk: &'a Chunk,
     stack: Vec<Value>,
 }
 
@@ -23,8 +24,8 @@ impl TracedCommand {
     }
 }
 
-impl VirtualMachine {
-    pub fn new(chunk: Chunk) -> Self { VirtualMachine { chunk, stack: Vec::new() } }
+impl<'a> VirtualMachine<'a> {
+    pub fn new(chunk: &'a Chunk) -> Self { VirtualMachine { chunk, stack: Vec::new() } }
 
     // In the book, the printing is a side-effect. That's not very testable. From a performance
     // point of view, there's nothing interesting about avoiding logs, so let's always do it.
@@ -88,8 +89,16 @@ impl VirtualMachine {
 mod tests {
     use crate::assert_eq_vec;
     use crate::rslox::compiled::chunk::OpCode;
+    use crate::rslox::compiled::tests::unsafe_parse;
 
     use super::*;
+
+    fn final_res(lines: Vec<&str>) -> f64 {
+        let stack = VirtualMachine::new(&unsafe_parse(lines)).disassemble().unwrap();
+        let e = &stack.last().unwrap().stack_state;
+        assert_eq!(e.len(), 1);
+        *e.last().unwrap()
+    }
 
     #[test]
     fn basic_bytecode() {
@@ -101,7 +110,7 @@ mod tests {
         chunks.write(OpCode::Return, 124);
 
         assert_eq!(
-            VirtualMachine::new(chunks).disassemble().unwrap(),
+            VirtualMachine::new(&chunks).disassemble().unwrap(),
             vec![
                 TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![1.2]),
                 TracedCommand::new(" 124 OP_NEGATE       ", vec![-1.2]),
@@ -130,7 +139,7 @@ mod tests {
         chunks.write(OpCode::Return, 123);
 
         assert_eq_vec!(
-            VirtualMachine::new(chunks).disassemble().unwrap(),
+            VirtualMachine::new(&chunks).disassemble().unwrap(),
             vec![
                 TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![1.0]),
                 TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![1.0, 2.0]),
@@ -140,6 +149,36 @@ mod tests {
                 TracedCommand::new("   | OP_NEGATE       ", vec![-0.5]),
                 TracedCommand::new("   | OP_RETURN       ", vec![-0.5]),
             ]
+        )
+    }
+
+    #[test]
+    fn trivial_precedence_final() {
+        assert_eq!(
+            final_res(vec![
+                "-1+2.5"
+            ]),
+            1.5,
+        )
+    }
+
+    #[test]
+    fn precedence_final() {
+        assert_eq!(
+            final_res(vec![
+                "-1*-3+2/-4"
+            ]),
+            2.5,
+        )
+    }
+
+    #[test]
+    fn precedence_parens() {
+        assert_eq!(
+            final_res(vec![
+                "-1*-(3+2)/-4"
+            ]),
+            -1.25,
         )
     }
 }

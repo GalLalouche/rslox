@@ -1,6 +1,6 @@
 use nonempty::NonEmpty;
 
-use crate::rslox::common::error::{convert_errors, ErrorInfo, LoxError, LoxResult};
+use crate::rslox::common::error::{convert_errors, ErrorInfo, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::interpreted::annotated_ast::{AnnotatedExpression, AnnotatedFunctionDef, AnnotatedProgram, AnnotatedStatement};
 use crate::rslox::interpreted::annotated_ast::AnnotatedExpression::{Assign, Atomic, Property, Set};
@@ -12,28 +12,6 @@ struct Parser<'a> {
     tokens: &'a Vec<Token>,
     errors: Vec<ParserError>,
     current: usize,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-struct ParserError {
-    message: String,
-    token: Token,
-}
-
-impl ParserError {
-    pub fn new<S: Into<String>>(message: S, token: Token) -> Self {
-        ParserError { message: message.into(), token }
-    }
-}
-
-impl LoxError for ParserError {
-    fn get_info(&self) -> ErrorInfo {
-        ErrorInfo { line: self.token.line }
-    }
-
-    fn get_message(&self) -> String {
-        self.message.to_owned()
-    }
 }
 
 pub fn parse(tokens: &Vec<Token>) -> LoxResult<AnnotatedProgram> {
