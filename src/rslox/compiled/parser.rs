@@ -77,6 +77,16 @@ impl<'a> Parser<'a> {
                 self.chunk.write_constant(*num, self.peek().line);
                 self.advance();
             }
+            TokenType::True | TokenType::False | TokenType::Nil => {
+                let op = match &self.peek().r#type {
+                    TokenType::True => OpCode::Bool(true),
+                    TokenType::False => OpCode::Bool(false),
+                    TokenType::Nil => OpCode::Nil,
+                    _ => panic!(),
+                };
+                self.chunk.write(op, self.peek().line);
+                self.advance();
+            }
             TokenType::OpenParen => {
                 self.advance();
                 self.parse_expression()?;
@@ -86,7 +96,7 @@ impl<'a> Parser<'a> {
         }
         while !self.is_at_end() && precedence <= Precedence::from(self.peek().r#type.borrow()) {
             let op = match &self.peek().r#type {
-                TokenType::Minus => OpCode::Substract,
+                TokenType::Minus => OpCode::Subtract,
                 TokenType::Plus => OpCode::Add,
                 TokenType::Slash => OpCode::Divide,
                 TokenType::Star => OpCode::Multiply,
@@ -206,7 +216,7 @@ mod tests {
         expected.write_constant(1.0, 1);
         expected.write(OpCode::Negate, 1);
         expected.write_constant(2.0, 1);
-        expected.write(OpCode::Substract, 1);
+        expected.write(OpCode::Subtract, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
             unsafe_parse(vec!["-1-2"]),

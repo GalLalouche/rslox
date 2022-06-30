@@ -1,9 +1,30 @@
-use crate::rslox::compiled::chunk::{Chunk, OpCode, Value};
+use std::convert::TryInto;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-enum InterpretResult {
-    CompileError,
-    RuntimeError,
+use crate::rslox::compiled::chunk::{Chunk, Line, OpCode, Value};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum VmResult {
+    CompileError { message: String, line: Line },
+    RuntimeError { message: String, line: Line },
+}
+
+impl VmResult {
+    pub fn line(&self) -> Line {
+        match &self {
+            VmResult::CompileError { line, .. } => *line,
+            VmResult::RuntimeError { line, .. } => *line,
+        }
+    }
+}
+
+fn try_number(value: &Value, line: &Line) -> Result<f64, VmResult> {
+    let f: &f64 =
+        value.try_into().map_err(|message| VmResult::RuntimeError { message, line: *line })?;
+    Ok(*f)
+}
+
+fn try_number_mut<'a>(value: &'a mut Value, line: &Line) -> Result<&'a mut f64, VmResult> {
+    value.try_into().map_err(|message| VmResult::RuntimeError { message, line: *line })
 }
 
 #[derive(Debug)]
@@ -30,7 +51,7 @@ impl<'a> VirtualMachine<'a> {
     // In the book, the printing is a side-effect. That's not very testable. From a performance
     // point of view, there's nothing interesting about avoiding logs, so let's always do it.
     // (Where's that lazy Writer monad when you need it, amirite?)
-    pub fn disassemble(&mut self) -> Result<Vec<TracedCommand>, InterpretResult> {
+    pub fn disassemble(&mut self) -> Result<Vec<TracedCommand>, VmResult> {
         let mut result = Vec::new();
         let mut index = 0;
         for (op, line) in &self.chunk.code {
@@ -45,8 +66,9 @@ impl<'a> VirtualMachine<'a> {
 
             macro_rules! binary {
                 ($l:tt) => {{
-                    let v1 = self.stack.pop().unwrap();
-                    *self.stack.last_mut().unwrap() $l v1;
+                    let v1 = try_number(&self.stack.pop().unwrap(), line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), line)?;
+                    *v2 $l v1;
                     "".to_owned()
                 }}
             }
@@ -54,13 +76,21 @@ impl<'a> VirtualMachine<'a> {
                 OpCode::Return => "".to_owned(),
                 OpCode::Constant(ptr) => {
                     let value = self.chunk.get_constant(ptr).unwrap();
-                    self.stack.push(value);
+                    self.stack.push(Value::Number(value));
                     format!(" {} '{}'", ptr, value)
+                }
+                OpCode::Bool(bool) => {
+                    self.stack.push(Value::Bool(*bool));
+                    format!("'{}'", bool)
+                }
+                OpCode::Nil => {
+                    self.stack.push(Value::Nil);
+                    format!("nil")
                 }
                 OpCode::Add => {
                     binary!(+=)
                 }
-                OpCode::Substract => {
+                OpCode::Subtract => {
                     binary!(-=)
                 }
                 OpCode::Multiply => {
@@ -70,7 +100,8 @@ impl<'a> VirtualMachine<'a> {
                     binary!(/=)
                 }
                 OpCode::Negate => {
-                    *self.stack.last_mut().unwrap() *= -1.0;
+                    let v: &mut f64 = try_number_mut(self.stack.last_mut().unwrap(), line)?;
+                    *v *= -1.0;
                     "".to_owned()
                 }
             });
@@ -97,7 +128,11 @@ mod tests {
         let stack = VirtualMachine::new(&unsafe_parse(lines)).disassemble().unwrap();
         let e = &stack.last().unwrap().stack_state;
         assert_eq!(e.len(), 1);
-        *e.last().unwrap()
+        TryInto::<&f64>::try_into(e.last().unwrap()).unwrap().clone()
+    }
+
+    fn single_error(lines: Vec<&str>) -> VmResult {
+        VirtualMachine::new(&unsafe_parse(lines)).disassemble().unwrap_err()
     }
 
     #[test]
@@ -112,9 +147,9 @@ mod tests {
         assert_eq!(
             VirtualMachine::new(&chunks).disassemble().unwrap(),
             vec![
-                TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![1.2]),
-                TracedCommand::new(" 124 OP_NEGATE       ", vec![-1.2]),
-                TracedCommand::new("   | OP_RETURN       ", vec![-1.2]),
+                TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![Value::Number(1.2)]),
+                TracedCommand::new(" 124 OP_NEGATE       ", vec![Value::Number(-1.2)]),
+                TracedCommand::new("   | OP_RETURN       ", vec![Value::Number(-1.2)]),
             ]
         )
     }
@@ -141,13 +176,13 @@ mod tests {
         assert_eq_vec!(
             VirtualMachine::new(&chunks).disassemble().unwrap(),
             vec![
-                TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![1.0]),
-                TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![1.0, 2.0]),
-                TracedCommand::new("   | OP_ADD          ", vec![3.0]),
-                TracedCommand::new("   | OP_CONSTANT      2 '6'", vec![3.0, 6.0]),
-                TracedCommand::new("   | OP_DIVIDE       ", vec![0.5]),
-                TracedCommand::new("   | OP_NEGATE       ", vec![-0.5]),
-                TracedCommand::new("   | OP_RETURN       ", vec![-0.5]),
+                TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![Value::Number(1.0)]),
+                TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![Value::Number(1.0), Value::Number(2.0)]),
+                TracedCommand::new("   | OP_ADD          ", vec![Value::Number(3.0)]),
+                TracedCommand::new("   | OP_CONSTANT      2 '6'", vec![Value::Number(3.0), Value::Number(6.0)]),
+                TracedCommand::new("   | OP_DIVIDE       ", vec![Value::Number(0.5)]),
+                TracedCommand::new("   | OP_NEGATE       ", vec![Value::Number(-0.5)]),
+                TracedCommand::new("   | OP_RETURN       ", vec![Value::Number(-0.5)]),
             ]
         )
     }
@@ -179,6 +214,16 @@ mod tests {
                 "-1*-(3+2)/-4"
             ]),
             -1.25,
+        )
+    }
+
+    #[test]
+    fn basic_run_time_error() {
+        assert_eq!(
+            single_error(vec![
+                "-false",
+            ]).line(),
+            1,
         )
     }
 }
