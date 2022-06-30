@@ -100,8 +100,18 @@ impl<'a> VirtualMachine<'a> {
                     binary!(/=)
                 }
                 OpCode::Negate => {
-                    let v: &mut f64 = try_number_mut(self.stack.last_mut().unwrap(), line)?;
+                    let v = try_number_mut(self.stack.last_mut().unwrap(), line)?;
                     *v *= -1.0;
+                    "".to_owned()
+                }
+                OpCode::Not => {
+                    let v = self.stack.last_mut().unwrap();
+                    let result = match &v {
+                        Value::Nil => true,
+                        Value::Bool(false) => true,
+                        _ => false,
+                    };
+                    *v = Value::Bool(result);
                     "".to_owned()
                 }
             });
@@ -124,11 +134,11 @@ mod tests {
 
     use super::*;
 
-    fn final_res(lines: Vec<&str>) -> f64 {
+    fn final_res(lines: Vec<&str>) -> Value {
         let stack = VirtualMachine::new(&unsafe_parse(lines)).disassemble().unwrap();
         let e = &stack.last().unwrap().stack_state;
         assert_eq!(e.len(), 1);
-        TryInto::<&f64>::try_into(e.last().unwrap()).unwrap().clone()
+        e.last().unwrap().clone()
     }
 
     fn single_error(lines: Vec<&str>) -> VmResult {
@@ -193,7 +203,7 @@ mod tests {
             final_res(vec![
                 "-1+2.5"
             ]),
-            1.5,
+            Value::Number(1.5),
         )
     }
 
@@ -203,7 +213,7 @@ mod tests {
             final_res(vec![
                 "-1*-3+2/-4"
             ]),
-            2.5,
+            Value::Number(2.5),
         )
     }
 
@@ -213,7 +223,7 @@ mod tests {
             final_res(vec![
                 "-1*-(3+2)/-4"
             ]),
-            -1.25,
+            Value::Number(-1.25),
         )
     }
 
@@ -224,6 +234,26 @@ mod tests {
                 "-false",
             ]).line(),
             1,
+        )
+    }
+
+    #[test]
+    fn single_bang() {
+        assert_eq!(
+            final_res(vec![
+                "!false",
+            ]),
+            Value::Bool(true),
+        )
+    }
+
+    #[test]
+    fn multiple_bang() {
+        assert_eq!(
+            final_res(vec![
+                "!!!!true",
+            ]),
+            Value::Bool(true),
         )
     }
 }

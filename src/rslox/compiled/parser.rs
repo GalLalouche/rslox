@@ -73,6 +73,12 @@ impl<'a> Parser<'a> {
                 self.parse_precedence(Precedence::Unary)?;
                 self.chunk.write(OpCode::Negate, line);
             }
+            TokenType::Bang => {
+                let line = self.peek().line;
+                self.advance();
+                self.parse_precedence(Precedence::Unary)?;
+                self.chunk.write(OpCode::Not, line);
+            }
             TokenType::NumberLiteral(num) => {
                 self.chunk.write_constant(*num, self.peek().line);
                 self.advance();

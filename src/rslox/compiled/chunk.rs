@@ -15,6 +15,7 @@ pub enum OpCode {
     Multiply,
     Divide,
     Negate,
+    Not,
 }
 
 impl OpCode {
