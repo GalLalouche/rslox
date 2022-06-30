@@ -140,12 +140,12 @@ impl<'a> VirtualMachine<'a> {
                 }
             });
             index += 1;
-            result.push(self.with_stack_state(command));
+            result.push(self.trace_with_stack_state(command));
         }
         Ok(result)
     }
 
-    fn with_stack_state<S: Into<String>>(&self, str: S) -> TracedCommand {
+    fn trace_with_stack_state<S: Into<String>>(&self, str: S) -> TracedCommand {
         TracedCommand::new(str, self.stack.clone())
     }
 }
