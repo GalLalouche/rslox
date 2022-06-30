@@ -5,6 +5,7 @@ edition = "2018"
 
 [dependencies]
 convert_case = "0.1.0"
+either = "1.7.0"
 nonempty = "0.7.0"
 num-derive = "0.3"
 num-traits = "0.2"

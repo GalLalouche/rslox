@@ -1,6 +1,7 @@
 use std::convert::TryInto;
 
 use crate::rslox::compiled::chunk::{Chunk, Line, OpCode, Value};
+use std::stringify;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VmResult {
@@ -17,14 +18,14 @@ impl VmResult {
     }
 }
 
-fn try_number(value: &Value, line: &Line) -> Result<f64, VmResult> {
+fn try_number(value: &Value, msg: &str, line: &Line) -> Result<f64, VmResult> {
     let f: &f64 =
-        value.try_into().map_err(|message| VmResult::RuntimeError { message, line: *line })?;
+        value.try_into().map_err(|err: String| VmResult::RuntimeError { message: format!("{} ({})", err, msg) , line: *line })?;
     Ok(*f)
 }
 
-fn try_number_mut<'a>(value: &'a mut Value, line: &Line) -> Result<&'a mut f64, VmResult> {
-    value.try_into().map_err(|message| VmResult::RuntimeError { message, line: *line })
+fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'a mut f64, VmResult> {
+    value.try_into().map_err(|err: String| VmResult::RuntimeError { message: format!("{} ({})", err, msg), line: *line })
 }
 
 #[derive(Debug)]
@@ -66,8 +67,8 @@ impl<'a> VirtualMachine<'a> {
 
             macro_rules! binary {
                 ($l:tt) => {{
-                    let v1 = try_number(&self.stack.pop().unwrap(), line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), line)?;
+                    let v1 = try_number(&self.stack.pop().unwrap(), stringify!($l), line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), stringify!($l), line)?;
                     *v2 $l v1;
                     "".to_owned()
                 }}
@@ -87,6 +88,29 @@ impl<'a> VirtualMachine<'a> {
                     self.stack.push(Value::Nil);
                     format!("nil")
                 }
+                OpCode::Equals => {
+                    let v1 = &self.stack.pop().unwrap();
+                    let v2 = self.stack.last_mut().unwrap();
+                    *v2 = Value::Bool(match (&v1, &v2) {
+                        (Value::Number(f1), Value::Number(f2)) => f1 == f2,
+                        (Value::Bool(b1), Value::Bool(b2)) => b1 == b2,
+                        (Value::Nil, Value::Nil) => true,
+                        _ => false,
+                    });
+                    "".to_owned()
+                }
+                OpCode::Greater => {
+                    let v1 = try_number(&self.stack.pop().unwrap(), "Greater lhs", line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Greater rhs", line)?;
+                    *(self.stack.last_mut().unwrap()) = Value::Bool(v1 < *v2);
+                    "".to_owned()
+                }
+                OpCode::Less => {
+                    let v1 = try_number(&self.stack.pop().unwrap(), "Less lhs", line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Less rhs", line)?;
+                    *(self.stack.last_mut().unwrap()) = Value::Bool(v1 > *v2);
+                    "".to_owned()
+                }
                 OpCode::Add => {
                     binary!(+=)
                 }
@@ -100,7 +124,7 @@ impl<'a> VirtualMachine<'a> {
                     binary!(/=)
                 }
                 OpCode::Negate => {
-                    let v = try_number_mut(self.stack.last_mut().unwrap(), line)?;
+                    let v = try_number_mut(self.stack.last_mut().unwrap(), "Negate", line)?;
                     *v *= -1.0;
                     "".to_owned()
                 }
@@ -135,7 +159,7 @@ mod tests {
     use super::*;
 
     fn final_res(lines: Vec<&str>) -> Value {
-        let stack = VirtualMachine::new(&unsafe_parse(lines)).disassemble().unwrap();
+        let stack = VirtualMachine::new(dbg!(&unsafe_parse(lines))).disassemble().unwrap();
         let e = &stack.last().unwrap().stack_state;
         assert_eq!(e.len(), 1);
         e.last().unwrap().clone()
@@ -252,6 +276,46 @@ mod tests {
         assert_eq!(
             final_res(vec![
                 "!!!!true",
+            ]),
+            Value::Bool(true),
+        )
+    }
+
+    #[test]
+    fn not_equal() {
+        assert_eq!(
+            final_res(vec![
+                "3 != 4",
+            ]),
+            Value::Bool(true),
+        )
+    }
+
+    #[test]
+    fn greater_equals() {
+        assert_eq!(
+            final_res(vec![
+                "3 >= 4",
+            ]),
+            Value::Bool(false),
+        )
+    }
+
+    #[test]
+    fn less() {
+        assert_eq!(
+            final_res(vec![
+                "-5 < -4",
+            ]),
+            Value::Bool(true),
+        )
+    }
+
+    #[test]
+    fn complex_equality() {
+        assert_eq!(
+            final_res(vec![
+                "!(5 - 4 > 3 * 2 == !nil)",
             ]),
             Value::Bool(true),
         )

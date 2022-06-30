@@ -16,6 +16,9 @@ pub enum OpCode {
     Divide,
     Negate,
     Not,
+    Equals,
+    Less,
+    Greater,
 }
 
 impl OpCode {

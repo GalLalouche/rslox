@@ -6,6 +6,7 @@ use num_traits::FromPrimitive;
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, OpCode};
+use either::Either::{Left, Right};
 
 pub fn parse(lexems: &Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Parser::new(lexems).parse())
@@ -46,6 +47,12 @@ impl From<&TokenType> for Precedence {
             TokenType::Plus => Precedence::Term,
             TokenType::Slash => Precedence::Factor,
             TokenType::Star => Precedence::Factor,
+            TokenType::EqualEqual => Precedence::Equality,
+            TokenType::BangEqual => Precedence::Equality,
+            TokenType::Less => Precedence::Comparison,
+            TokenType::LessEqual => Precedence::Comparison,
+            TokenType::Greater => Precedence::Comparison,
+            TokenType::GreaterEqual => Precedence::Comparison,
             _ => Precedence::TopLevel,
         }
     }
@@ -102,20 +109,32 @@ impl<'a> Parser<'a> {
         }
         while !self.is_at_end() && precedence <= Precedence::from(self.peek().r#type.borrow()) {
             let op = match &self.peek().r#type {
-                TokenType::Minus => OpCode::Subtract,
-                TokenType::Plus => OpCode::Add,
-                TokenType::Slash => OpCode::Divide,
-                TokenType::Star => OpCode::Multiply,
+                TokenType::Minus => Left(OpCode::Subtract),
+                TokenType::Plus => Left(OpCode::Add),
+                TokenType::Slash => Left(OpCode::Divide),
+                TokenType::Star => Left(OpCode::Multiply),
+                TokenType::EqualEqual => Left(OpCode::Equals),
+                TokenType::Less => Left(OpCode::Less),
+                TokenType::Greater => Left(OpCode::Greater),
+                TokenType::BangEqual => Right(OpCode::Equals),
+                TokenType::LessEqual => Right(OpCode::Greater),
+                TokenType::GreaterEqual => Right(OpCode::Less),
                 _ => panic!()
             };
             let line = self.peek().line;
             let next = Precedence::from(&self.peek().r#type).next().unwrap();
             self.advance();
             self.parse_precedence(next)?;
-            self.chunk.write(op, line);
+            match op {
+                Left(op) => self.chunk.write(op, line),
+                Right(op) => {
+                    self.chunk.write(op, line);
+                    self.chunk.write(OpCode::Not, line);
+                }
+            }
         }
         Ok(())
-    }
+   }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), ParserError> {
         let expected_msg = msg.unwrap_or(expected.to_string());
