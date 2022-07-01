@@ -20,7 +20,7 @@ impl VmResult {
 
 fn try_number(value: &Value, msg: &str, line: &Line) -> Result<f64, VmResult> {
     let f: &f64 =
-        value.try_into().map_err(|err: String| VmResult::RuntimeError { message: format!("{} ({})", err, msg) , line: *line })?;
+        value.try_into().map_err(|err: String| VmResult::RuntimeError { message: format!("{} ({})", err, msg), line: *line })?;
     Ok(*f)
 }
 
@@ -29,8 +29,8 @@ fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'
 }
 
 #[derive(Debug)]
-struct VirtualMachine<'a> {
-    chunk: &'a Chunk,
+struct VirtualMachine {
+    chunk: Chunk,
     stack: Vec<Value>,
 }
 
@@ -46,19 +46,21 @@ impl TracedCommand {
     }
 }
 
-impl<'a> VirtualMachine<'a> {
-    pub fn new(chunk: &'a Chunk) -> Self { VirtualMachine { chunk, stack: Vec::new() } }
+impl VirtualMachine {
+    pub fn new(chunk: Chunk) -> Self { VirtualMachine { chunk, stack: Vec::new() } }
 
     // In the book, the printing is a side-effect. That's not very testable. From a performance
     // point of view, there's nothing interesting about avoiding logs, so let's always do it.
     // (Where's that lazy Writer monad when you need it, amirite?)
-    pub fn disassemble(&mut self) -> Result<Vec<TracedCommand>, VmResult> {
+    pub fn disassemble(mut self) -> Result<Vec<TracedCommand>, VmResult> {
         let mut result = Vec::new();
-        let mut index = 0;
-        for (op, line) in &self.chunk.code {
+        let mut index: usize = 0;
+        let mut previous_line: Line = 0;
+        let Chunk { code, constants } = self.chunk;
+        for (op, line) in code {
             let prefix = format!(
                 "{:>4}",
-                if index > 0 && *line == self.chunk.get(index - 1).unwrap().1 {
+                if index > 0 && line == previous_line {
                     "   |".to_owned()
                 } else {
                     line.to_string()
@@ -67,8 +69,8 @@ impl<'a> VirtualMachine<'a> {
 
             macro_rules! binary {
                 ($l:tt) => {{
-                    let v1 = try_number(&self.stack.pop().unwrap(), stringify!($l), line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), stringify!($l), line)?;
+                    let v1 = try_number(&self.stack.pop().unwrap(), stringify!($l), &line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), stringify!($l), &line)?;
                     *v2 $l v1;
                     "".to_owned()
                 }}
@@ -76,12 +78,12 @@ impl<'a> VirtualMachine<'a> {
             let command = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
                 OpCode::Return => "".to_owned(),
                 OpCode::Constant(ptr) => {
-                    let value = self.chunk.get_constant(ptr).unwrap();
-                    self.stack.push(Value::Number(value));
+                    let value = constants.get(ptr).unwrap();
+                    self.stack.push(Value::Number(*value));
                     format!(" {} '{}'", ptr, value)
                 }
                 OpCode::Bool(bool) => {
-                    self.stack.push(Value::Bool(*bool));
+                    self.stack.push(Value::Bool(bool));
                     format!("'{}'", bool)
                 }
                 OpCode::Nil => {
@@ -89,7 +91,7 @@ impl<'a> VirtualMachine<'a> {
                     format!("nil")
                 }
                 OpCode::Equals => {
-                    let v1 = &self.stack.pop().unwrap();
+                    let v1 = self.stack.pop().unwrap();
                     let v2 = self.stack.last_mut().unwrap();
                     *v2 = Value::Bool(match (&v1, &v2) {
                         (Value::Number(f1), Value::Number(f2)) => f1 == f2,
@@ -100,14 +102,14 @@ impl<'a> VirtualMachine<'a> {
                     "".to_owned()
                 }
                 OpCode::Greater => {
-                    let v1 = try_number(&self.stack.pop().unwrap(), "Greater lhs", line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Greater rhs", line)?;
+                    let v1 = try_number(&self.stack.pop().unwrap(), "Greater lhs", &line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Greater rhs", &line)?;
                     *(self.stack.last_mut().unwrap()) = Value::Bool(v1 < *v2);
                     "".to_owned()
                 }
                 OpCode::Less => {
-                    let v1 = try_number(&self.stack.pop().unwrap(), "Less lhs", line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Less rhs", line)?;
+                    let v1 = try_number(&self.stack.pop().unwrap(), "Less lhs", &line)?;
+                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Less rhs", &line)?;
                     *(self.stack.last_mut().unwrap()) = Value::Bool(v1 > *v2);
                     "".to_owned()
                 }
@@ -124,7 +126,7 @@ impl<'a> VirtualMachine<'a> {
                     binary!(/=)
                 }
                 OpCode::Negate => {
-                    let v = try_number_mut(self.stack.last_mut().unwrap(), "Negate", line)?;
+                    let v = try_number_mut(self.stack.last_mut().unwrap(), "Negate", &line)?;
                     *v *= -1.0;
                     "".to_owned()
                 }
@@ -139,14 +141,12 @@ impl<'a> VirtualMachine<'a> {
                     "".to_owned()
                 }
             });
+            result.push(TracedCommand::new(command, self.stack.clone()));
+
             index += 1;
-            result.push(self.trace_with_stack_state(command));
+            previous_line = line;
         }
         Ok(result)
-    }
-
-    fn trace_with_stack_state<S: Into<String>>(&self, str: S) -> TracedCommand {
-        TracedCommand::new(str, self.stack.clone())
     }
 }
 
@@ -159,14 +159,14 @@ mod tests {
     use super::*;
 
     fn final_res(lines: Vec<&str>) -> Value {
-        let stack = VirtualMachine::new(dbg!(&unsafe_parse(lines))).disassemble().unwrap();
+        let stack = VirtualMachine::new(unsafe_parse(lines)).disassemble().unwrap();
         let e = &stack.last().unwrap().stack_state;
         assert_eq!(e.len(), 1);
         e.last().unwrap().clone()
     }
 
     fn single_error(lines: Vec<&str>) -> VmResult {
-        VirtualMachine::new(&unsafe_parse(lines)).disassemble().unwrap_err()
+        VirtualMachine::new(unsafe_parse(lines)).disassemble().unwrap_err()
     }
 
     #[test]
@@ -179,7 +179,7 @@ mod tests {
         chunks.write(OpCode::Return, 124);
 
         assert_eq!(
-            VirtualMachine::new(&chunks).disassemble().unwrap(),
+            VirtualMachine::new(chunks).disassemble().unwrap(),
             vec![
                 TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![Value::Number(1.2)]),
                 TracedCommand::new(" 124 OP_NEGATE       ", vec![Value::Number(-1.2)]),
@@ -208,7 +208,7 @@ mod tests {
         chunks.write(OpCode::Return, 123);
 
         assert_eq_vec!(
-            VirtualMachine::new(&chunks).disassemble().unwrap(),
+            VirtualMachine::new(chunks).disassemble().unwrap(),
             vec![
                 TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![Value::Number(1.0)]),
                 TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![Value::Number(1.0), Value::Number(2.0)]),
