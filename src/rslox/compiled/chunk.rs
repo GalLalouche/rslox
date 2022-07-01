@@ -15,7 +15,7 @@ pub enum OpCode {
     // since std::String is already heap managed, we don't need a separate pointer here.
     // Hurray for real languages!
     // While "Weak", this is never expected to actually point to null as Strings are only
-    // "uninterened" when garbage collected.
+    // "uninterested" when garbage collected.
     String(Weak<String>),
     Nil,
     Add,
@@ -95,6 +95,12 @@ impl PartialEq<Self> for Value {
     }
 }
 impl Value {
+    pub fn is_string(&self) -> bool {
+        match &self {
+            Value::String(_) => true,
+            _ => false,
+        }
+    }
     pub fn is_nil(&self) -> bool {
         match &self {
             Value::Nil => true,
@@ -143,6 +149,17 @@ impl<'a> TryFrom<&'a Value> for &'a bool {
         match &value {
             Value::Bool(b) => Ok(&b),
             e => Err(format!("Expected Value::Bool, but found {:?}", e)),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Value> for Weak<String> {
+    type Error = String;
+
+    fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
+        match &value {
+            Value::String(s) => Ok(s.clone()),
+            e => Err(format!("Expected Value::String, but found {:?}", e)),
         }
     }
 }

@@ -1,4 +1,6 @@
 use std::convert::TryInto;
+use std::ops::Deref;
+use std::rc::{Rc, Weak};
 use std::stringify;
 
 use crate::rslox::compiled::chunk::{Chunk, Line, OpCode, Value};
@@ -34,14 +36,40 @@ struct VirtualMachine {
     stack: Vec<Value>,
 }
 
+// Copies all interned data locally.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TracedValue {
+    Number(f64),
+    Bool(bool),
+    Nil,
+    String(String),
+}
+
+impl From<&Value> for TracedValue {
+    fn from(v: &Value) -> Self {
+        match v {
+            Value::Number(n) => TracedValue::Number(*n),
+            Value::Bool(b) => TracedValue::Bool(*b),
+            Value::Nil => TracedValue::Nil,
+            Value::String(s) => TracedValue::String(s.upgrade().unwrap().deref().to_owned()),
+        }
+    }
+}
+
+impl TracedValue {
+    pub fn string<S: Into<String>>(str: S) -> Self {
+        TracedValue::String(str.into())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 struct TracedCommand {
     assembly: String,
-    stack_state: Vec<Value>,
+    stack_state: Vec<TracedValue>,
 }
 
 impl TracedCommand {
-    pub fn new<S: Into<String>>(assembly: S, stack_state: Vec<Value>) -> Self {
+    pub fn new<S: Into<String>>(assembly: S, stack_state: Vec<TracedValue>) -> Self {
         TracedCommand { assembly: assembly.into(), stack_state }
     }
 }
@@ -56,7 +84,7 @@ impl VirtualMachine {
         let mut result = Vec::new();
         let mut index: usize = 0;
         let mut previous_line: Line = 0;
-        let Chunk { code, number_constants: constants, .. } = self.chunk;
+        let Chunk { code, number_constants: constants, mut interned_strings } = self.chunk;
         for (op, line) in code {
             let prefix = format!(
                 "{:>4}",
@@ -103,17 +131,35 @@ impl VirtualMachine {
                 OpCode::Greater => {
                     let v1 = try_number(&self.stack.pop().unwrap(), "Greater lhs", &line)?;
                     let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Greater rhs", &line)?;
-                    *(self.stack.last_mut().unwrap()) = Value::Bool(v1 < *v2);
+                    *(self.stack.last_mut().unwrap()) = Value::Bool(*v2 > v1);
                     "".to_owned()
                 }
                 OpCode::Less => {
                     let v1 = try_number(&self.stack.pop().unwrap(), "Less lhs", &line)?;
                     let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Less rhs", &line)?;
-                    *(self.stack.last_mut().unwrap()) = Value::Bool(v1 > *v2);
+                    *(self.stack.last_mut().unwrap()) = Value::Bool(*v2 < v1);
                     "".to_owned()
                 }
                 OpCode::Add => {
-                    binary!(+=)
+                    if self.stack.last().unwrap().is_string() {
+                        let popped = &self.stack.pop().unwrap();
+                        let s1: Weak<String> = TryInto::<Weak<String>>::try_into(popped).unwrap();
+                        let s2: Weak<String> =
+                            TryInto::<Weak<String>>::try_into(self.stack.last().unwrap())
+                                .map_err(|err: String| VmResult::RuntimeError {
+                                    message: format!("{} ({})", err, "String concat"),
+                                    line,
+                                })?;
+                        let result = interned_strings.get_or_insert(Rc::new(format!(
+                            "{}{}",
+                            s2.upgrade().unwrap(),
+                            s1.upgrade().unwrap(),
+                        )));
+                        *(self.stack.last_mut().unwrap()) = Value::String(Rc::downgrade(result));
+                        "".to_owned()
+                    } else {
+                        binary!(+=)
+                    }
                 }
                 OpCode::Subtract => {
                     binary!(-=)
@@ -140,7 +186,13 @@ impl VirtualMachine {
                     "".to_owned()
                 }
             });
-            result.push(TracedCommand::new(command, self.stack.clone()));
+            result.push(TracedCommand::new(
+                command,
+                self.stack
+                    .iter()
+                    .map(|v| Into::<TracedValue>::into(v))
+                    .collect(),
+            ));
 
             index += 1;
             previous_line = line;
@@ -157,7 +209,7 @@ mod tests {
 
     use super::*;
 
-    fn final_res(lines: Vec<&str>) -> Value {
+    fn final_res(lines: Vec<&str>) -> TracedValue {
         let stack = VirtualMachine::new(unsafe_parse(lines)).disassemble().unwrap();
         let e = &stack.last().unwrap().stack_state;
         assert_eq!(e.len(), 1);
@@ -180,9 +232,9 @@ mod tests {
         assert_eq!(
             VirtualMachine::new(chunks).disassemble().unwrap(),
             vec![
-                TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![Value::Number(1.2)]),
-                TracedCommand::new(" 124 OP_NEGATE       ", vec![Value::Number(-1.2)]),
-                TracedCommand::new("   | OP_RETURN       ", vec![Value::Number(-1.2)]),
+                TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![TracedValue::Number(1.2)]),
+                TracedCommand::new(" 124 OP_NEGATE       ", vec![TracedValue::Number(-1.2)]),
+                TracedCommand::new("   | OP_RETURN       ", vec![TracedValue::Number(-1.2)]),
             ]
         )
     }
@@ -209,13 +261,13 @@ mod tests {
         assert_eq_vec!(
             VirtualMachine::new(chunks).disassemble().unwrap(),
             vec![
-                TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![Value::Number(1.0)]),
-                TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![Value::Number(1.0), Value::Number(2.0)]),
-                TracedCommand::new("   | OP_ADD          ", vec![Value::Number(3.0)]),
-                TracedCommand::new("   | OP_CONSTANT      2 '6'", vec![Value::Number(3.0), Value::Number(6.0)]),
-                TracedCommand::new("   | OP_DIVIDE       ", vec![Value::Number(0.5)]),
-                TracedCommand::new("   | OP_NEGATE       ", vec![Value::Number(-0.5)]),
-                TracedCommand::new("   | OP_RETURN       ", vec![Value::Number(-0.5)]),
+                TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![TracedValue::Number(1.0)]),
+                TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![TracedValue::Number(1.0), TracedValue::Number(2.0)]),
+                TracedCommand::new("   | OP_ADD          ", vec![TracedValue::Number(3.0)]),
+                TracedCommand::new("   | OP_CONSTANT      2 '6'", vec![TracedValue::Number(3.0), TracedValue::Number(6.0)]),
+                TracedCommand::new("   | OP_DIVIDE       ", vec![TracedValue::Number(0.5)]),
+                TracedCommand::new("   | OP_NEGATE       ", vec![TracedValue::Number(-0.5)]),
+                TracedCommand::new("   | OP_RETURN       ", vec![TracedValue::Number(-0.5)]),
             ]
         )
     }
@@ -226,7 +278,7 @@ mod tests {
             final_res(vec![
                 "-1+2.5"
             ]),
-            Value::Number(1.5),
+            TracedValue::Number(1.5),
         )
     }
 
@@ -236,7 +288,7 @@ mod tests {
             final_res(vec![
                 "-1*-3+2/-4"
             ]),
-            Value::Number(2.5),
+            TracedValue::Number(2.5),
         )
     }
 
@@ -246,7 +298,7 @@ mod tests {
             final_res(vec![
                 "-1*-(3+2)/-4"
             ]),
-            Value::Number(-1.25),
+            TracedValue::Number(-1.25),
         )
     }
 
@@ -266,7 +318,7 @@ mod tests {
             final_res(vec![
                 "!false",
             ]),
-            Value::Bool(true),
+            TracedValue::Bool(true),
         )
     }
 
@@ -276,7 +328,7 @@ mod tests {
             final_res(vec![
                 "!!!!true",
             ]),
-            Value::Bool(true),
+            TracedValue::Bool(true),
         )
     }
 
@@ -286,7 +338,7 @@ mod tests {
             final_res(vec![
                 "3 != 4",
             ]),
-            Value::Bool(true),
+            TracedValue::Bool(true),
         )
     }
 
@@ -296,7 +348,7 @@ mod tests {
             final_res(vec![
                 "3 >= 4",
             ]),
-            Value::Bool(false),
+            TracedValue::Bool(false),
         )
     }
 
@@ -306,7 +358,7 @@ mod tests {
             final_res(vec![
                 "-5 < -4",
             ]),
-            Value::Bool(true),
+            TracedValue::Bool(true),
         )
     }
 
@@ -316,7 +368,7 @@ mod tests {
             final_res(vec![
                 "!(5 - 4 > 3 * 2 == !nil)",
             ]),
-            Value::Bool(true),
+            TracedValue::Bool(true),
         )
     }
 
@@ -326,7 +378,17 @@ mod tests {
             final_res(vec![
                 r#""string" == "string""#,
             ]),
-            Value::Bool(true),
+            TracedValue::Bool(true),
+        )
+    }
+
+    #[test]
+    fn string_concat() {
+        assert_eq!(
+            final_res(vec![
+                r#""abc" + "def""#,
+            ]),
+            TracedValue::string("abcdef"),
         )
     }
 }
