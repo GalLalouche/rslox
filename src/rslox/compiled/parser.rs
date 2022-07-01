@@ -65,14 +65,35 @@ impl Parser {
 
     pub fn parse(mut self) -> Result<Chunk, NonEmpty<ParserError>> {
         let mut line: Line = 0;
+        let mut errors = Vec::new();
         while !self.is_at_end() {
-            match self.declaration()  {
+            match self.declaration() {
                 Ok(l) => line = l,
-                Err(err) => return Err(NonEmpty::new(err)),
+                Err(err) => {
+                    errors.push(err);
+                    self.synchronize();
+                }
             }
         }
-        self.chunk.write(OpCode::Return, line);
-        Ok(self.chunk)
+        match NonEmpty::from_vec(errors) {
+            None => {
+                self.chunk.write(OpCode::Return, line);
+                Ok(self.chunk)
+            }
+            Some(errs) => Err(errs),
+        }
+    }
+
+    fn synchronize(&mut self) {
+        while !self.is_at_end() && !self.matches(TokenType::Semicolon) {
+            match self.peek_type() {
+                TokenType::Class | TokenType::Fun | TokenType::Var | TokenType::For | TokenType::If
+                | TokenType::While | TokenType::Print | TokenType::Return => return,
+                _ => {
+                    self.advance();
+                }
+            }
+        }
     }
 
     fn declaration(&mut self) -> Result<Line, ParserError> {
@@ -97,7 +118,7 @@ impl Parser {
         self.parse_precedence(Precedence::Assignment)
     }
     fn parse_precedence(&mut self, precedence: Precedence) -> Result<Line, ParserError> {
-        let Token {line, r#type} = self.advance();
+        let Token { line, r#type } = self.advance();
         match r#type {
             TokenType::Minus => {
                 self.parse_precedence(Precedence::Unary)?;
@@ -126,11 +147,12 @@ impl Parser {
                 self.parse_expression()?;
                 self.consume(TokenType::CloseParen, None)?;
             }
-            e => todo!("{:?}", e),
+            e => return Err(
+                ParserError::new(format!("Unexpected '{:?}'", e), Token { r#type: e, line })),
         }
         let mut last_line = line;
         while !self.is_at_end() && precedence <= Precedence::from(self.peek_type()) {
-            let Token {line, r#type} = self.advance();
+            let Token { line, r#type } = self.advance();
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
                 TokenType::Minus => Left(OpCode::Subtract),
@@ -156,7 +178,7 @@ impl Parser {
             last_line = line;
         }
         Ok(last_line)
-   }
+    }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), ParserError> {
         let expected_msg = msg.unwrap_or(expected.to_string());
@@ -164,7 +186,7 @@ impl Parser {
             return Err(ParserError::new(
                 format!("Expected {}, but encountered end of file", expected_msg),
                 self.tokens.last().expect("empty tokens").to_owned(),
-            ))
+            ));
         }
 
         let token = self.advance();
@@ -211,6 +233,7 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::ops::Deref;
     use std::rc::Rc;
 
     use crate::rslox::common::tests::unsafe_tokenize;
@@ -293,6 +316,22 @@ mod tests {
         assert_eq!(
             interned_strings,
             expected,
+        )
+    }
+
+    #[test]
+    fn multiple_error_report() {
+        let vec: Vec<_> = parse(
+            unsafe_tokenize(
+                vec![
+                    "1 +;",
+                    "3 * 3;",
+                    r#"print -;"#,
+                ])
+        ).unwrap_err().into();
+        assert_eq!(
+            vec.iter().map(|e| e.deref().get_info().line).collect::<Vec<_>>(),
+            vec![1, 3],
         )
     }
 }
