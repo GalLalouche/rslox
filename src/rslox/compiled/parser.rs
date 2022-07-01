@@ -1,20 +1,20 @@
-use std::borrow::Borrow;
+use std::mem;
 
+use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, OpCode};
-use either::Either::{Left, Right};
+use crate::rslox::compiled::chunk::{Chunk, Line, OpCode};
 
-pub fn parse(lexems: &Vec<Token>) -> LoxResult<Chunk> {
+pub fn parse(lexems: Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Parser::new(lexems).parse())
 }
 
-struct Parser<'a> {
+struct Parser {
     chunk: Chunk,
-    tokens: &'a Vec<Token>,
+    tokens: Vec<Token>,
     current: usize,
 }
 
@@ -58,57 +58,54 @@ impl From<&TokenType> for Precedence {
     }
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(lexems: &'a Vec<Token>) -> Self {
+impl Parser{
+    pub fn new(lexems: Vec<Token>) -> Self {
         Parser { chunk: Chunk::new(), tokens: lexems, current: 0 }
     }
 
     pub fn parse(mut self) -> Result<Chunk, NonEmpty<ParserError>> {
-        self.parse_expression().map_err(NonEmpty::new)?;
-        self.chunk.write(OpCode::Return, self.tokens.last().unwrap().line);
+        let line = self.parse_expression().map_err(NonEmpty::new)?;
+        self.chunk.write(OpCode::Return, line);
         Ok(self.chunk)
     }
 
-    fn parse_expression(&mut self) -> Result<(), ParserError> {
+    fn parse_expression(&mut self) -> Result<Line, ParserError> {
         self.parse_precedence(Precedence::Assignment)
     }
-    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), ParserError> {
-        match &self.peek().r#type {
+    fn parse_precedence(&mut self, precedence: Precedence) -> Result<Line, ParserError> {
+        let Token {line, r#type} = self.advance();
+        match r#type {
             TokenType::Minus => {
-                let line = self.peek().line;
-                self.advance();
                 self.parse_precedence(Precedence::Unary)?;
                 self.chunk.write(OpCode::Negate, line);
             }
             TokenType::Bang => {
-                let line = self.peek().line;
-                self.advance();
                 self.parse_precedence(Precedence::Unary)?;
                 self.chunk.write(OpCode::Not, line);
             }
             TokenType::NumberLiteral(num) => {
-                self.chunk.write_constant(*num, self.peek().line);
-                self.advance();
+                self.chunk.write_constant(num, line);
             }
             TokenType::True | TokenType::False | TokenType::Nil => {
-                let op = match &self.peek().r#type {
+                let op = match &r#type {
                     TokenType::True => OpCode::Bool(true),
                     TokenType::False => OpCode::Bool(false),
                     TokenType::Nil => OpCode::Nil,
                     _ => panic!(),
                 };
-                self.chunk.write(op, self.peek().line);
-                self.advance();
+                self.chunk.write(op, line);
             }
             TokenType::OpenParen => {
-                self.advance();
                 self.parse_expression()?;
                 self.consume(TokenType::CloseParen, None)?;
             }
             e => todo!("{:?}", e),
         }
-        while !self.is_at_end() && precedence <= Precedence::from(self.peek().r#type.borrow()) {
-            let op = match &self.peek().r#type {
+        let mut last_line = line;
+        while !self.is_at_end() && precedence <= Precedence::from(self.peek_type()) {
+            let Token {line, r#type} = self.advance();
+            let next_precedence = Precedence::from(&r#type).next().unwrap();
+            let op = match r#type {
                 TokenType::Minus => Left(OpCode::Subtract),
                 TokenType::Plus => Left(OpCode::Add),
                 TokenType::Slash => Left(OpCode::Divide),
@@ -121,10 +118,7 @@ impl<'a> Parser<'a> {
                 TokenType::GreaterEqual => Right(OpCode::Less),
                 _ => panic!()
             };
-            let line = self.peek().line;
-            let next = Precedence::from(&self.peek().r#type).next().unwrap();
-            self.advance();
-            self.parse_precedence(next)?;
+            self.parse_precedence(next_precedence)?;
             match op {
                 Left(op) => self.chunk.write(op, line),
                 Right(op) => {
@@ -132,51 +126,50 @@ impl<'a> Parser<'a> {
                     self.chunk.write(OpCode::Not, line);
                 }
             }
+            last_line = line;
         }
-        Ok(())
+        Ok(last_line)
    }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), ParserError> {
         let expected_msg = msg.unwrap_or(expected.to_string());
         if self.is_at_end() {
-            Err(ParserError::new(
+            return Err(ParserError::new(
                 format!("Expected {}, but encountered end of file", expected_msg),
                 self.tokens.last().expect("empty tokens").to_owned(),
             ))
-        } else if self.peek().get_type() != &expected {
-            let p = self.peek();
+        }
+
+        let token = self.advance();
+        if token.r#type != expected {
             Err(ParserError::new(
                 format!(
                     "Expected {}, but encountered {} at line {}",
                     expected_msg,
-                    p.get_type(),
-                    p.line,
+                    token.r#type,
+                    token.line,
                 ),
-                p.to_owned(),
+                token.to_owned(),
             ))
         } else {
             assert_ne!(expected, TokenType::Eof);
-            self.advance();
             Ok(())
         }
     }
 
-    fn advance(&mut self) -> &Token {
-        assert!(!self.is_at_end());
+    fn advance(&mut self) -> Token {
+        let result =
+            mem::replace(self.tokens.get_mut(self.current).unwrap(), Token::new(0, TokenType::Eof));
         self.current += 1;
-        self.previous()
+        result
     }
 
     fn is_at_end(&self) -> bool {
         self.current == self.tokens.len()
     }
 
-    fn previous(&self) -> &Token {
-        &self.tokens[self.current - 1]
-    }
-
-    fn peek(&self) -> &Token {
-        &self.tokens[self.current]
+    fn peek_type(&self) -> &TokenType {
+        &self.tokens[self.current].r#type
     }
 }
 
@@ -204,7 +197,7 @@ mod tests {
         expected.write_constant(123.0, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            parse(&unsafe_tokenize(vec!["(123)"])).unwrap(),
+            parse(unsafe_tokenize(vec!["(123)"])).unwrap(),
             expected,
         )
     }

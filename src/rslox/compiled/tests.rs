@@ -4,5 +4,5 @@ use crate::rslox::compiled::parser::parse;
 
 #[cfg(test)]
 pub fn unsafe_parse(program: Vec<&str>) -> Chunk {
-    parse(&unsafe_tokenize(program)).expect("Failed to parse")
+    parse(unsafe_tokenize(program)).expect("Failed to parse")
 }

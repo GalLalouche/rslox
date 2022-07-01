@@ -5,6 +5,7 @@
 #[macro_use]
 extern crate num_derive;
 extern crate num_traits;
+extern crate core;
 
 use std::env;
 
