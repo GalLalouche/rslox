@@ -27,6 +27,7 @@ pub enum OpCode {
     Equals,
     Less,
     Greater,
+    Print,
 }
 
 impl PartialEq<Self> for OpCode {
@@ -94,6 +95,7 @@ impl PartialEq<Self> for Value {
         }
     }
 }
+
 impl Value {
     pub fn is_string(&self) -> bool {
         match &self {
@@ -105,6 +107,15 @@ impl Value {
         match &self {
             Value::Nil => true,
             _ => false,
+        }
+    }
+
+    pub fn stringify(&self) -> String {
+        match self {
+            Value::Number(f) => f.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Nil => "nil".to_owned(),
+            Value::String(s) => s.upgrade().unwrap().to_string(),
         }
     }
 }

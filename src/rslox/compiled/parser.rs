@@ -64,9 +64,31 @@ impl Parser {
     }
 
     pub fn parse(mut self) -> Result<Chunk, NonEmpty<ParserError>> {
-        let line = self.parse_expression().map_err(NonEmpty::new)?;
+        let mut line: Line = 0;
+        while !self.is_at_end() {
+            match self.declaration()  {
+                Ok(l) => line = l,
+                Err(err) => return Err(NonEmpty::new(err)),
+            }
+        }
         self.chunk.write(OpCode::Return, line);
         Ok(self.chunk)
+    }
+
+    fn declaration(&mut self) -> Result<Line, ParserError> {
+        self.statement()
+    }
+
+    fn statement(&mut self) -> Result<Line, ParserError> {
+        let line = if self.matches(TokenType::Print) {
+            let line = self.parse_expression()?;
+            self.chunk.write(OpCode::Print, line);
+            Ok(line)
+        } else {
+            self.parse_expression()
+        }?;
+        self.consume(TokenType::Semicolon, None)?;
+        Ok(line)
     }
 
     fn parse_expression(&mut self) -> Result<Line, ParserError> {
@@ -160,6 +182,14 @@ impl Parser {
         }
     }
 
+    fn matches(&mut self, tt: TokenType) -> bool {
+        let result = self.peek_type() == &tt;
+        if result {
+            self.advance();
+        }
+        result
+    }
+
     fn advance(&mut self) -> Token {
         let result =
             mem::replace(self.tokens.get_mut(self.current).unwrap(), Token::new(0, TokenType::Eof));
@@ -192,7 +222,7 @@ mod tests {
         expected.write_constant(123.0, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["123"]),
+            unsafe_parse(vec!["123;"]),
             expected,
         )
     }
@@ -203,7 +233,7 @@ mod tests {
         expected.write_constant(123.0, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            parse(unsafe_tokenize(vec!["(123)"])).unwrap(),
+            parse(unsafe_tokenize(vec!["(123);"])).unwrap(),
             expected,
         )
     }
@@ -215,7 +245,7 @@ mod tests {
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-123"]),
+            unsafe_parse(vec!["-123;"]),
             expected,
         )
     }
@@ -229,7 +259,7 @@ mod tests {
         expected.write(OpCode::Add, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-1+2"]),
+            unsafe_parse(vec!["-1+2;"]),
             expected,
         )
     }
@@ -243,14 +273,14 @@ mod tests {
         expected.write(OpCode::Subtract, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-1-2"]),
+            unsafe_parse(vec!["-1-2;"]),
             expected,
         )
     }
 
     #[test]
     fn string_interning() {
-        let interned_strings = unsafe_parse(vec![r#""str" == "str""#]).interned_strings;
+        let interned_strings = unsafe_parse(vec![r#""str" == "str";"#]).interned_strings;
         let mut expected = HashSet::new();
         expected.insert(Rc::new("str".to_owned()));
         assert_eq!(

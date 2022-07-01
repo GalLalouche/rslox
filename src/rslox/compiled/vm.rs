@@ -1,4 +1,5 @@
 use std::convert::TryInto;
+use std::io::Write;
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
 use std::stringify;
@@ -80,7 +81,7 @@ impl VirtualMachine {
     // In the book, the printing is a side-effect. That's not very testable. From a performance
     // point of view, there's nothing interesting about avoiding logs, so let's always do it.
     // (Where's that lazy Writer monad when you need it, amirite?)
-    pub fn disassemble(mut self) -> Result<Vec<TracedCommand>, VmResult> {
+    pub fn disassemble(mut self, writer: &mut impl Write) -> Result<Vec<TracedCommand>, VmResult> {
         let mut result = Vec::new();
         let mut index: usize = 0;
         let mut previous_line: Line = 0;
@@ -105,6 +106,11 @@ impl VirtualMachine {
             }
             let command = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
                 OpCode::Return => "".to_owned(),
+                OpCode::Print => {
+                   let expr = self.stack.pop().unwrap();
+                    write!(writer, "{}", expr.stringify()).expect("Not written");
+                    "".to_owned()
+                }
                 OpCode::Constant(ptr) => {
                     let value = constants.get(ptr).unwrap();
                     self.stack.push(Value::Number(*value));
@@ -203,6 +209,7 @@ impl VirtualMachine {
 
 #[cfg(test)]
 mod tests {
+    use std::io::{Cursor, sink};
     use crate::assert_eq_vec;
     use crate::rslox::compiled::chunk::OpCode;
     use crate::rslox::compiled::tests::unsafe_parse;
@@ -210,14 +217,20 @@ mod tests {
     use super::*;
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
-        let stack = VirtualMachine::new(unsafe_parse(lines)).disassemble().unwrap();
+        let stack = VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut sink()).unwrap();
         let e = &stack.last().unwrap().stack_state;
         assert_eq!(e.len(), 1);
         e.last().unwrap().clone()
     }
 
+    fn printed_string(lines: Vec<&str>) -> String {
+        let mut buff = Cursor::new(Vec::new());
+        VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut buff).unwrap();
+        buff.get_ref().into_iter().map(|i| *i as char).collect()
+    }
+
     fn single_error(lines: Vec<&str>) -> VmResult {
-        VirtualMachine::new(unsafe_parse(lines)).disassemble().unwrap_err()
+        VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut sink()).unwrap_err()
     }
 
     #[test]
@@ -230,7 +243,7 @@ mod tests {
         chunks.write(OpCode::Return, 124);
 
         assert_eq!(
-            VirtualMachine::new(chunks).disassemble().unwrap(),
+            VirtualMachine::new(chunks).disassemble(&mut sink()).unwrap(),
             vec![
                 TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![TracedValue::Number(1.2)]),
                 TracedCommand::new(" 124 OP_NEGATE       ", vec![TracedValue::Number(-1.2)]),
@@ -259,7 +272,7 @@ mod tests {
         chunks.write(OpCode::Return, 123);
 
         assert_eq_vec!(
-            VirtualMachine::new(chunks).disassemble().unwrap(),
+            VirtualMachine::new(chunks).disassemble(&mut sink()).unwrap(),
             vec![
                 TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![TracedValue::Number(1.0)]),
                 TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![TracedValue::Number(1.0), TracedValue::Number(2.0)]),
@@ -276,7 +289,7 @@ mod tests {
     fn trivial_precedence_final() {
         assert_eq!(
             final_res(vec![
-                "-1+2.5"
+                "-1+2.5;"
             ]),
             TracedValue::Number(1.5),
         )
@@ -286,7 +299,7 @@ mod tests {
     fn precedence_final() {
         assert_eq!(
             final_res(vec![
-                "-1*-3+2/-4"
+                "-1*-3+2/-4;"
             ]),
             TracedValue::Number(2.5),
         )
@@ -296,7 +309,7 @@ mod tests {
     fn precedence_parens() {
         assert_eq!(
             final_res(vec![
-                "-1*-(3+2)/-4"
+                "-1*-(3+2)/-4;"
             ]),
             TracedValue::Number(-1.25),
         )
@@ -306,7 +319,7 @@ mod tests {
     fn basic_run_time_error() {
         assert_eq!(
             single_error(vec![
-                "-false",
+                "-false;",
             ]).line(),
             1,
         )
@@ -316,7 +329,7 @@ mod tests {
     fn single_bang() {
         assert_eq!(
             final_res(vec![
-                "!false",
+                "!false;",
             ]),
             TracedValue::Bool(true),
         )
@@ -326,7 +339,7 @@ mod tests {
     fn multiple_bang() {
         assert_eq!(
             final_res(vec![
-                "!!!!true",
+                "!!!!true;",
             ]),
             TracedValue::Bool(true),
         )
@@ -336,7 +349,7 @@ mod tests {
     fn not_equal() {
         assert_eq!(
             final_res(vec![
-                "3 != 4",
+                "3 != 4;",
             ]),
             TracedValue::Bool(true),
         )
@@ -346,7 +359,7 @@ mod tests {
     fn greater_equals() {
         assert_eq!(
             final_res(vec![
-                "3 >= 4",
+                "3 >= 4;",
             ]),
             TracedValue::Bool(false),
         )
@@ -356,7 +369,7 @@ mod tests {
     fn less() {
         assert_eq!(
             final_res(vec![
-                "-5 < -4",
+                "-5 < -4;",
             ]),
             TracedValue::Bool(true),
         )
@@ -366,7 +379,7 @@ mod tests {
     fn complex_equality() {
         assert_eq!(
             final_res(vec![
-                "!(5 - 4 > 3 * 2 == !nil)",
+                "!(5 - 4 > 3 * 2 == !nil);",
             ]),
             TracedValue::Bool(true),
         )
@@ -376,7 +389,7 @@ mod tests {
     fn string_equality() {
         assert_eq!(
             final_res(vec![
-                r#""string" == "string""#,
+                r#""string" == "string";"#,
             ]),
             TracedValue::Bool(true),
         )
@@ -385,10 +398,10 @@ mod tests {
     #[test]
     fn string_concat() {
         assert_eq!(
-            final_res(vec![
-                r#""abc" + "def""#,
+            printed_string(vec![
+                r#"print "abc" + "def";"#,
             ]),
-            TracedValue::string("abcdef"),
+            "abcdef",
         )
     }
 }
