@@ -7,18 +7,44 @@ use convert_case::{Case, Casing};
 
 pub type Ptr = usize;
 
+// Weak that is garbage collected, and is therefore deref-able to plain old value, with the risk of
+// panic-ing for catching programmer errors. Basically here for PartialEq implementation. I'm sure
+// there's a good reason why it's not implemented for plain old Weak :\
 #[derive(Debug, Clone)]
+pub struct GcWeak<A>(Weak<A>);
+
+impl <A> GcWeak<A> {
+    pub fn unsafe_upgrade(&self) -> Rc<A> {
+      self.0.upgrade().unwrap()
+    }
+}
+
+impl <A> From<&Rc<A>> for GcWeak<A> {
+    fn from(rc: &Rc<A>) -> Self {
+        GcWeak(Rc::downgrade(rc))
+    }
+}
+
+impl <A> PartialEq for GcWeak<A> {
+    fn eq(&self, other: &Self) -> bool {
+        assert!(self.0.upgrade().is_some());
+        assert!(other.0.upgrade().is_some());
+        self.0.ptr_eq(&other.0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
+    Return,
     Pop,
     Print,
-    Return,
     Constant(Ptr),
     Bool(bool),
     // since std::String is already heap managed, we don't need a separate pointer here.
     // Hurray for real languages!
     // While "Weak", this is never expected to actually point to null as Strings are only
     // "uninterested" when garbage collected.
-    String(Weak<String>),
+    String(GcWeak<String>),
     Nil,
     Add,
     Subtract,
@@ -29,34 +55,6 @@ pub enum OpCode {
     Equals,
     Less,
     Greater,
-}
-
-impl PartialEq<Self> for OpCode {
-    fn eq(&self, other: &Self) -> bool {
-        match (&self, &other) {
-            (OpCode::Return, OpCode::Return) => true,
-            (OpCode::Pop, OpCode::Pop) => true,
-            (OpCode::Print, OpCode::Print) => true,
-            (OpCode::Constant(p1), OpCode::Constant(p2)) => p1 == p2,
-            (OpCode::Bool(b1), OpCode::Bool(b2)) => b1 == b2,
-            (OpCode::String(s1), OpCode::String(s2)) => {
-                assert!(s1.upgrade().is_some());
-                assert!(s2.upgrade().is_some());
-                s1.ptr_eq(s2)
-            },
-            (OpCode::Nil, OpCode::Nil) => true,
-            (OpCode::Add, OpCode::Add) => true,
-            (OpCode::Subtract, OpCode::Subtract) => true,
-            (OpCode::Multiply, OpCode::Multiply) => true,
-            (OpCode::Divide, OpCode::Divide) => true,
-            (OpCode::Negate, OpCode::Negate) => true,
-            (OpCode::Not, OpCode::Not) => true,
-            (OpCode::Equals, OpCode::Equals) => true,
-            (OpCode::Less, OpCode::Less) => true,
-            (OpCode::Greater, OpCode::Greater) => true,
-            _ => false,
-        }
-    }
 }
 
 impl Eq for &OpCode {}
@@ -80,7 +78,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
-    String(Weak<String>),
+    String(GcWeak<String>),
 }
 
 impl PartialEq<Self> for Value {
@@ -89,11 +87,7 @@ impl PartialEq<Self> for Value {
             (Value::Number(n1), Value::Number(n2)) => n1 == n2,
             (Value::Bool(b1), Value::Bool(b2)) => b1 == b2,
             (Value::Nil, Value::Nil) => true,
-            (Value::String(s1), Value::String(s2)) => {
-                assert!(s1.upgrade().is_some());
-                assert!(s2.upgrade().is_some());
-                s1.ptr_eq(s2)
-            },
+            (Value::String(s1), Value::String(s2)) => s1 == s2,
             _ => false,
         }
     }
@@ -118,7 +112,7 @@ impl Value {
             Value::Number(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
-            Value::String(s) => s.upgrade().unwrap().to_string(),
+            Value::String(s) => s.unsafe_upgrade().to_string(),
         }
     }
 }
@@ -167,7 +161,7 @@ impl<'a> TryFrom<&'a Value> for &'a bool {
     }
 }
 
-impl<'a> TryFrom<&'a Value> for Weak<String> {
+impl<'a> TryFrom<&'a Value> for GcWeak<String> {
     type Error = String;
 
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
@@ -183,11 +177,17 @@ pub struct Chunk {
     pub code: Vec<(OpCode, Line)>,
     pub number_constants: Vec<f64>,
     pub interned_strings: HashSet<Rc<String>>,
+    pub globals: HashSet<Rc<String>>,
 }
 
 impl Chunk {
     pub fn new() -> Self {
-        Chunk { code: Vec::new(), number_constants: Vec::new(), interned_strings: HashSet::new() }
+        Chunk {
+            code: Vec::new(),
+            number_constants: Vec::new(),
+            interned_strings: HashSet::new(),
+            globals: HashSet::new(),
+        }
     }
     pub fn write(&mut self, op: OpCode, line: Line) {
         self.code.push((op, line));
@@ -201,7 +201,7 @@ impl Chunk {
     }
     pub fn add_string(&mut self, str: String, line: Line) {
         let entry = self.interned_strings.get_or_insert(Rc::new(str));
-        self.code.push((OpCode::String(Rc::downgrade(entry)), line))
+        self.code.push((OpCode::String(entry.into()), line))
     }
     pub fn add_constant(&mut self, value: f64) -> usize {
         self.number_constants.push(value);

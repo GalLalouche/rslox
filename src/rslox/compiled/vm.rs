@@ -1,10 +1,10 @@
 use std::convert::TryInto;
 use std::io::Write;
 use std::ops::Deref;
-use std::rc::{Rc, Weak};
+use std::rc::Rc;
 use std::stringify;
 
-use crate::rslox::compiled::chunk::{Chunk, Line, OpCode, Value};
+use crate::rslox::compiled::chunk::{Chunk, GcWeak, Line, OpCode, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VmResult {
@@ -52,7 +52,7 @@ impl From<&Value> for TracedValue {
             Value::Number(n) => TracedValue::Number(*n),
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
-            Value::String(s) => TracedValue::String(s.upgrade().unwrap().deref().to_owned()),
+            Value::String(s) => TracedValue::String(s.unsafe_upgrade().deref().to_owned()),
         }
     }
 }
@@ -85,7 +85,7 @@ impl VirtualMachine {
         let mut result = Vec::new();
         let mut index: usize = 0;
         let mut previous_line: Line = 0;
-        let Chunk { code, number_constants: constants, mut interned_strings } = self.chunk;
+        let Chunk { code, number_constants: constants, mut interned_strings, .. } = self.chunk;
         for (op, line) in code {
             let prefix = format!(
                 "{:>4}",
@@ -153,19 +153,16 @@ impl VirtualMachine {
                 OpCode::Add => {
                     if self.stack.last().unwrap().is_string() {
                         let popped = &self.stack.pop().unwrap();
-                        let s1: Weak<String> = TryInto::<Weak<String>>::try_into(popped).unwrap();
-                        let s2: Weak<String> =
-                            TryInto::<Weak<String>>::try_into(self.stack.last().unwrap())
+                        let s1: GcWeak<String> = TryInto::<GcWeak<String>>::try_into(popped).unwrap();
+                        let s2: GcWeak<String> =
+                            TryInto::<GcWeak<String>>::try_into(self.stack.last().unwrap())
                                 .map_err(|err: String| VmResult::RuntimeError {
                                     message: format!("{} ({})", err, "String concat"),
                                     line,
                                 })?;
-                        let result = interned_strings.get_or_insert(Rc::new(format!(
-                            "{}{}",
-                            s2.upgrade().unwrap(),
-                            s1.upgrade().unwrap(),
-                        )));
-                        *(self.stack.last_mut().unwrap()) = Value::String(Rc::downgrade(result));
+                        let result = interned_strings.get_or_insert(Rc::new(
+                            format!("{}{}", *s2.unsafe_upgrade(), *s1.unsafe_upgrade())));
+                        *(self.stack.last_mut().unwrap()) = Value::String(result.into());
                         "".to_owned()
                     } else {
                         binary!(+=)
