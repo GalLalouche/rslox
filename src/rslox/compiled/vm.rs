@@ -1,7 +1,7 @@
 use std::convert::TryInto;
+use std::stringify;
 
 use crate::rslox::compiled::chunk::{Chunk, Line, OpCode, Value};
-use std::stringify;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum VmResult {
@@ -56,7 +56,7 @@ impl VirtualMachine {
         let mut result = Vec::new();
         let mut index: usize = 0;
         let mut previous_line: Line = 0;
-        let Chunk { code, constants } = self.chunk;
+        let Chunk { code, number_constants: constants, .. } = self.chunk;
         for (op, line) in code {
             let prefix = format!(
                 "{:>4}",
@@ -90,15 +90,14 @@ impl VirtualMachine {
                     self.stack.push(Value::Nil);
                     format!("nil")
                 }
+                OpCode::String(s) => {
+                    self.stack.push(Value::String(s));
+                    format!("nil")
+                }
                 OpCode::Equals => {
                     let v1 = self.stack.pop().unwrap();
                     let v2 = self.stack.last_mut().unwrap();
-                    *v2 = Value::Bool(match (&v1, &v2) {
-                        (Value::Number(f1), Value::Number(f2)) => f1 == f2,
-                        (Value::Bool(b1), Value::Bool(b2)) => b1 == b2,
-                        (Value::Nil, Value::Nil) => true,
-                        _ => false,
-                    });
+                    *v2 = Value::Bool(&v1 == v2);
                     "".to_owned()
                 }
                 OpCode::Greater => {
@@ -316,6 +315,16 @@ mod tests {
         assert_eq!(
             final_res(vec![
                 "!(5 - 4 > 3 * 2 == !nil)",
+            ]),
+            Value::Bool(true),
+        )
+    }
+
+    #[test]
+    fn string_equality() {
+        assert_eq!(
+            final_res(vec![
+                r#""string" == "string""#,
             ]),
             Value::Bool(true),
         )

@@ -58,7 +58,7 @@ impl From<&TokenType> for Precedence {
     }
 }
 
-impl Parser{
+impl Parser {
     pub fn new(lexems: Vec<Token>) -> Self {
         Parser { chunk: Chunk::new(), tokens: lexems, current: 0 }
     }
@@ -85,6 +85,9 @@ impl Parser{
             }
             TokenType::NumberLiteral(num) => {
                 self.chunk.write_constant(num, line);
+            }
+            TokenType::StringLiteral(str) => {
+                self.chunk.add_string(str, line);
             }
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
@@ -175,6 +178,9 @@ impl Parser{
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::rc::Rc;
+
     use crate::rslox::common::tests::unsafe_tokenize;
     use crate::rslox::compiled::tests::unsafe_parse;
 
@@ -238,6 +244,17 @@ mod tests {
         expected.write(OpCode::Return, 1);
         assert_eq!(
             unsafe_parse(vec!["-1-2"]),
+            expected,
+        )
+    }
+
+    #[test]
+    fn string_interning() {
+        let interned_strings = unsafe_parse(vec![r#""str" == "str""#]).interned_strings;
+        let mut expected = HashSet::new();
+        expected.insert(Rc::new("str".to_owned()));
+        assert_eq!(
+            interned_strings,
             expected,
         )
     }

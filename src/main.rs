@@ -1,3 +1,4 @@
+#![feature(hash_set_entry)]
 #![feature(iter_intersperse)]
 #![feature(option_result_contains)]
 #![feature(try_blocks)]
