@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Write;
 use std::ops::Deref;
@@ -35,6 +36,7 @@ fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'
 struct VirtualMachine {
     chunk: Chunk,
     stack: Vec<Value>,
+    globals: HashMap<String, Value>,
 }
 
 // Copies all interned data locally.
@@ -76,7 +78,9 @@ impl TracedCommand {
 }
 
 impl VirtualMachine {
-    pub fn new(chunk: Chunk) -> Self { VirtualMachine { chunk, stack: Vec::new() } }
+    pub fn new(chunk: Chunk) -> Self {
+        VirtualMachine { chunk, stack: Vec::new(), globals: HashMap::new() }
+    }
 
     // In the book, the printing is a side-effect. That's not very testable. From a performance
     // point of view, there's nothing interesting about avoiding logs, so let's always do it.
@@ -119,6 +123,20 @@ impl VirtualMachine {
                     let value = constants.get(ptr).unwrap();
                     self.stack.push(Value::Number(*value));
                     format!(" {} '{}'", ptr, value)
+                }
+                OpCode::Identifier(name) => {
+                    let rc = name.unsafe_upgrade();
+                    let value = self.globals.get(rc.deref()).ok_or(VmResult::RuntimeError {
+                        message: format!("Unrecognized identifier '{}'", rc),
+                        line,
+                    })?;
+                    self.stack.push(value.clone());
+                    "".to_owned()
+                }
+                OpCode::DefineGlobal(name) => {
+                    let value = self.stack.pop().unwrap();
+                    self.globals.insert(name.unsafe_upgrade().deref().to_owned(), value);
+                    "".to_owned()
                 }
                 OpCode::Bool(bool) => {
                     self.stack.push(Value::Bool(bool));
@@ -415,5 +433,16 @@ mod tests {
         let stack: Vec<TracedCommand> = VirtualMachine::new(unsafe_parse(vec!["1 + 2;"]))
             .disassemble(&mut sink()).unwrap();
         assert_eq!(&stack.last().unwrap().stack_state.len(), &0);
+    }
+
+    #[test]
+    fn basic_variable_access() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 4;",
+                "print x;",
+            ]),
+            "4",
+        )
     }
 }

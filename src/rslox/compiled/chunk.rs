@@ -1,11 +1,32 @@
-use std::borrow::BorrowMut;
+use std::borrow::{Borrow, BorrowMut};
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::ops::Deref;
 use std::rc::{Rc, Weak};
 
 use convert_case::{Case, Casing};
 
+use crate::rslox::compiled::tests::DeepEq;
+
 pub type Ptr = usize;
+
+// Overriding for Borrow
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct GcRc<A>(Rc<A>);
+
+impl<A> Deref for GcRc<A> {
+    type Target = A;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+impl Borrow<str> for GcRc<String> {
+    fn borrow(&self) -> &str {
+        self.deref().as_ref()
+    }
+}
 
 // Weak that is garbage collected, and is therefore deref-able to plain old value, with the risk of
 // panic-ing for catching programmer errors. Basically here for PartialEq implementation. I'm sure
@@ -13,19 +34,19 @@ pub type Ptr = usize;
 #[derive(Debug, Clone)]
 pub struct GcWeak<A>(Weak<A>);
 
-impl <A> GcWeak<A> {
+impl<A> GcWeak<A> {
     pub fn unsafe_upgrade(&self) -> Rc<A> {
-      self.0.upgrade().unwrap()
+        self.0.upgrade().unwrap()
     }
 }
 
-impl <A> From<&Rc<A>> for GcWeak<A> {
+impl<A> From<&Rc<A>> for GcWeak<A> {
     fn from(rc: &Rc<A>) -> Self {
         GcWeak(Rc::downgrade(rc))
     }
 }
 
-impl <A> PartialEq for GcWeak<A> {
+impl<A> PartialEq for GcWeak<A> {
     fn eq(&self, other: &Self) -> bool {
         assert!(self.0.upgrade().is_some());
         assert!(other.0.upgrade().is_some());
@@ -38,6 +59,7 @@ pub enum OpCode {
     Return,
     Pop,
     Print,
+    DefineGlobal(GcWeak<String>),
     Constant(Ptr),
     Bool(bool),
     // since std::String is already heap managed, we don't need a separate pointer here.
@@ -45,6 +67,7 @@ pub enum OpCode {
     // While "Weak", this is never expected to actually point to null as Strings are only
     // "uninterested" when garbage collected.
     String(GcWeak<String>),
+    Identifier(GcWeak<String>),
     Nil,
     Add,
     Subtract,
@@ -58,6 +81,18 @@ pub enum OpCode {
 }
 
 impl Eq for &OpCode {}
+
+impl DeepEq for OpCode {
+    fn deep_eq(&self, other: &Self) -> bool {
+        match (&self, &other) {
+            (OpCode::DefineGlobal(s1), OpCode::DefineGlobal(s2)) =>
+                s1.unsafe_upgrade() == s2.unsafe_upgrade(),
+            (OpCode::String(s1), OpCode::String(s2)) =>
+                s1.unsafe_upgrade() == s2.unsafe_upgrade(),
+            _ => self == other
+        }
+    }
+}
 
 impl OpCode {
     pub fn to_upper_snake(&self) -> String {
@@ -177,7 +212,7 @@ pub struct Chunk {
     pub code: Vec<(OpCode, Line)>,
     pub number_constants: Vec<f64>,
     pub interned_strings: HashSet<Rc<String>>,
-    pub globals: HashSet<Rc<String>>,
+    globals: HashSet<GcRc<String>>,
 }
 
 impl Chunk {
@@ -196,8 +231,14 @@ impl Chunk {
         let ptr = self.add_constant(value);
         self.write(OpCode::Constant(ptr), line)
     }
+    pub fn define_global(&mut self, str: String) -> GcWeak<String> {
+        (&self.globals.get_or_insert(GcRc(Rc::new(str))).0).into()
+    }
     pub fn get(&self, i: usize) -> Option<&(OpCode, Line)> {
         self.code.get(i)
+    }
+    pub fn get_global(&self, str: &str) -> Option<GcWeak<String>> {
+        self.globals.get(str).map(|e| (&e.0).into())
     }
     pub fn add_string(&mut self, str: String, line: Line) {
         let entry = self.interned_strings.get_or_insert(Rc::new(str));
@@ -209,5 +250,13 @@ impl Chunk {
     }
     pub fn get_constant(&self, ptr: &Ptr) -> Option<f64> {
         self.number_constants.get(*ptr).cloned()
+    }
+}
+
+impl DeepEq for Chunk {
+    fn deep_eq(&self, other: &Self) -> bool {
+        self.code.deep_eq(&other.code) && self.number_constants == other.number_constants &&
+            self.interned_strings == other.interned_strings &&
+            self.globals == other.globals
     }
 }
