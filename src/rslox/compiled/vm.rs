@@ -106,8 +106,12 @@ impl VirtualMachine {
             }
             let command = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
                 OpCode::Return => "".to_owned(),
+                OpCode::Pop => {
+                    self.stack.pop().unwrap();
+                    "".to_owned()
+                }
                 OpCode::Print => {
-                   let expr = self.stack.pop().unwrap();
+                    let expr = self.stack.pop().unwrap();
                     write!(writer, "{}", expr.stringify()).expect("Not written");
                     "".to_owned()
                 }
@@ -210,6 +214,7 @@ impl VirtualMachine {
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, sink};
+
     use crate::assert_eq_vec;
     use crate::rslox::compiled::chunk::OpCode;
     use crate::rslox::compiled::tests::unsafe_parse;
@@ -218,7 +223,10 @@ mod tests {
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
         let stack = VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut sink()).unwrap();
-        let e = &stack.last().unwrap().stack_state;
+        // Last is return, which as an empty, because second from last is pop, which will also end
+        // with an empty stack.
+        let third_from_last = &stack.get(stack.len() - 3).unwrap();
+        let e = third_from_last.stack_state.clone();
         assert_eq!(e.len(), 1);
         e.last().unwrap().clone()
     }
@@ -403,5 +411,12 @@ mod tests {
             ]),
             "abcdef",
         )
+    }
+
+    #[test]
+    fn stack_is_empty_after_statement() {
+        let stack: Vec<TracedCommand> = VirtualMachine::new(unsafe_parse(vec!["1 + 2;"]))
+            .disassemble(&mut sink()).unwrap();
+        assert_eq!(&stack.last().unwrap().stack_state.len(), &0);
     }
 }

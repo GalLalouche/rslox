@@ -9,6 +9,8 @@ pub type Ptr = usize;
 
 #[derive(Debug, Clone)]
 pub enum OpCode {
+    Pop,
+    Print,
     Return,
     Constant(Ptr),
     Bool(bool),
@@ -27,13 +29,14 @@ pub enum OpCode {
     Equals,
     Less,
     Greater,
-    Print,
 }
 
 impl PartialEq<Self> for OpCode {
     fn eq(&self, other: &Self) -> bool {
         match (&self, &other) {
             (OpCode::Return, OpCode::Return) => true,
+            (OpCode::Pop, OpCode::Pop) => true,
+            (OpCode::Print, OpCode::Print) => true,
             (OpCode::Constant(p1), OpCode::Constant(p2)) => p1 == p2,
             (OpCode::Bool(b1), OpCode::Bool(b2)) => b1 == b2,
             (OpCode::String(s1), OpCode::String(s2)) => {

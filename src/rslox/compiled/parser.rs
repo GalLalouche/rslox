@@ -83,10 +83,12 @@ impl Parser {
         let line = if self.matches(TokenType::Print) {
             let line = self.parse_expression()?;
             self.chunk.write(OpCode::Print, line);
-            Ok(line)
+            line
         } else {
-            self.parse_expression()
-        }?;
+            let line = self.parse_expression()?;
+            self.chunk.write(OpCode::Pop, line);
+            line
+        };
         self.consume(TokenType::Semicolon, None)?;
         Ok(line)
     }
@@ -220,6 +222,7 @@ mod tests {
     fn constant() {
         let mut expected = Chunk::new();
         expected.write_constant(123.0, 1);
+        expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
             unsafe_parse(vec!["123;"]),
@@ -231,6 +234,7 @@ mod tests {
     fn grouped_constant() {
         let mut expected = Chunk::new();
         expected.write_constant(123.0, 1);
+        expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
             parse(unsafe_tokenize(vec!["(123);"])).unwrap(),
@@ -243,6 +247,7 @@ mod tests {
         let mut expected = Chunk::new();
         expected.write_constant(123.0, 1);
         expected.write(OpCode::Negate, 1);
+        expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
             unsafe_parse(vec!["-123;"]),
@@ -257,6 +262,7 @@ mod tests {
         expected.write(OpCode::Negate, 1);
         expected.write_constant(2.0, 1);
         expected.write(OpCode::Add, 1);
+        expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
             unsafe_parse(vec!["-1+2;"]),
@@ -271,6 +277,7 @@ mod tests {
         expected.write(OpCode::Negate, 1);
         expected.write_constant(2.0, 1);
         expected.write(OpCode::Subtract, 1);
+        expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
             unsafe_parse(vec!["-1-2;"]),
