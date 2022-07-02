@@ -70,3 +70,12 @@ pub fn eq_vec_msg<A>(left: Vec<A>, right: Vec<A>) -> Option<String> where A: Par
         }
     }}
 }
+
+#[cfg(test)]
+#[macro_export] macro_rules! assert_msg_contains {
+    ($msg: expr, $str: expr) => {{
+        if !$msg.contains($str) {
+            panic!("'{}' Does not contain {}", $msg, $str)
+        }
+    }}
+}

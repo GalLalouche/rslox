@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::fmt::Debug;
 use std::rc::Rc;
+use nonempty::NonEmpty;
 
 pub type RcRc<A> = Rc<RefCell<A>>;
 
@@ -19,4 +20,9 @@ impl<A: Debug> SliceExt<A> for [A] {
     }
 }
 
-
+impl<A: Debug> SliceExt<A> for NonEmpty<A> {
+    fn unwrap_single(&self) -> &A {
+        assert!(self.tail().is_empty(), "Expected NonEmpty with single element, got {:?}", self);
+        self.first()
+    }
+}

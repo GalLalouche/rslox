@@ -2,6 +2,7 @@
 #![feature(iter_intersperse)]
 #![feature(option_result_contains)]
 #![feature(try_blocks)]
+#![feature(type_ascription)]
 
 #[macro_use]
 extern crate num_derive;
