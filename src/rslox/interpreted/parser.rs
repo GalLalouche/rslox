@@ -556,6 +556,7 @@ impl<'a> Parser<'a> {
 #[cfg(test)]
 mod tests {
     use crate::rslox::common::lexer::tokenize;
+    use crate::rslox::common::utils::SliceExt;
     use crate::rslox::interpreted::ast::{Expression, FunctionDef, Program, Statement};
     use crate::rslox::interpreted::ast::Atom::Number;
     use crate::rslox::interpreted::ast::Expression::{Atomic, Binary, FunctionCall, Grouping, Set, Ternary, Unary};
@@ -571,9 +572,7 @@ mod tests {
     fn parse_single_statement(line: &str) -> Statement {
         let tokens = tokenize(line).unwrap();
         let prog = Parser::parse(&tokens).unwrap();
-        let stmts = AnnotatedProgram::from(prog).statements;
-        assert_eq!(stmts.len(), 1);
-        stmts.first().unwrap().into()
+        AnnotatedProgram::from(prog).statements.unwrap_single().into()
     }
 
     fn parse_expression(line: &str) -> Expression {

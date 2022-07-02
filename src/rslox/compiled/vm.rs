@@ -231,6 +231,7 @@ mod tests {
     use std::io::{Cursor, sink};
 
     use crate::assert_eq_vec;
+    use crate::rslox::common::utils::SliceExt;
     use crate::rslox::compiled::chunk::OpCode;
     use crate::rslox::compiled::tests::unsafe_parse;
 
@@ -241,9 +242,7 @@ mod tests {
         // Last is return, which as an empty, because second from last is pop, which will also end
         // with an empty stack.
         let third_from_last = &stack.get(stack.len() - 3).unwrap();
-        let e = third_from_last.stack_state.clone();
-        assert_eq!(e.len(), 1);
-        e.last().unwrap().clone()
+        third_from_last.stack_state.clone().unwrap_single().clone()
     }
 
     fn printed_string(lines: Vec<&str>) -> String {
