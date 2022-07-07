@@ -35,7 +35,7 @@ impl Borrow<str> for GcRc<String> {
 pub struct GcWeak<A>(Weak<A>);
 
 impl<A> GcWeak<A> {
-    pub fn unsafe_upgrade(&self) -> Rc<A> {
+    pub fn unwrap_upgrade(&self) -> Rc<A> {
         self.0.upgrade().unwrap()
     }
 }
@@ -60,6 +60,7 @@ pub enum OpCode {
     Pop,
     Print,
     DefineGlobal(GcWeak<String>),
+    DefineLocal(usize),
     Constant(Ptr),
     Bool(bool),
     // since std::String is already heap managed, we don't need a separate pointer here.
@@ -67,7 +68,8 @@ pub enum OpCode {
     // While "Weak", this is never expected to actually point to null as Strings are only
     // "uninterested" when garbage collected.
     String(GcWeak<String>),
-    Identifier(GcWeak<String>),
+    GlobalIdentifier(GcWeak<String>),
+    LocalIdentifier(usize),
     Nil,
     Add,
     Subtract,
@@ -86,9 +88,9 @@ impl DeepEq for OpCode {
     fn deep_eq(&self, other: &Self) -> bool {
         match (&self, &other) {
             (OpCode::DefineGlobal(s1), OpCode::DefineGlobal(s2)) =>
-                s1.unsafe_upgrade() == s2.unsafe_upgrade(),
+                s1.unwrap_upgrade() == s2.unwrap_upgrade(),
             (OpCode::String(s1), OpCode::String(s2)) =>
-                s1.unsafe_upgrade() == s2.unsafe_upgrade(),
+                s1.unwrap_upgrade() == s2.unwrap_upgrade(),
             _ => self == other
         }
     }
@@ -147,7 +149,7 @@ impl Value {
             Value::Number(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
-            Value::String(s) => s.unsafe_upgrade().to_string(),
+            Value::String(s) => s.unwrap_upgrade().to_string(),
         }
     }
 }

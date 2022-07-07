@@ -54,7 +54,7 @@ impl From<&Value> for TracedValue {
             Value::Number(n) => TracedValue::Number(*n),
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
-            Value::String(s) => TracedValue::String(s.unsafe_upgrade().deref().to_owned()),
+            Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
         }
     }
 }
@@ -124,19 +124,27 @@ impl VirtualMachine {
                     self.stack.push(Value::Number(*value));
                     format!(" {} '{}'", ptr, value)
                 }
-                OpCode::Identifier(name) => {
-                    let rc = name.unsafe_upgrade();
+                OpCode::GlobalIdentifier(name) => {
+                    let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref()).ok_or(VmResult::RuntimeError {
                         message: format!("Unrecognized identifier '{}'", rc),
                         line,
                     })?;
                     self.stack.push(value.clone());
-                    "".to_owned()
+                    format!("'{}'", name.unwrap_upgrade())
+                }
+                OpCode::LocalIdentifier(index) => {
+                    self.stack.push(self.stack.get(index).unwrap().clone());
+                    format!("{}", index)
                 }
                 OpCode::DefineGlobal(name) => {
                     let value = self.stack.pop().unwrap();
-                    self.globals.insert(name.unsafe_upgrade().deref().to_owned(), value);
-                    "".to_owned()
+                    self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value);
+                    format!("'{}'", name.unwrap_upgrade())
+                }
+                OpCode::DefineLocal(index) => {
+                    (*self.stack.get_mut(index).unwrap()) = self.stack.last().unwrap().clone();
+                    format!("{}", index)
                 }
                 OpCode::Bool(bool) => {
                     self.stack.push(Value::Bool(bool));
@@ -147,8 +155,9 @@ impl VirtualMachine {
                     format!("nil")
                 }
                 OpCode::String(s) => {
+                    let result = format!("'{}'", s.unwrap_upgrade());
                     self.stack.push(Value::String(s));
-                    format!("nil")
+                    result
                 }
                 OpCode::Equals => {
                     let v1 = self.stack.pop().unwrap();
@@ -179,7 +188,7 @@ impl VirtualMachine {
                                     line,
                                 })?;
                         let result = interned_strings.get_or_insert(Rc::new(
-                            format!("{}{}", *s2.unsafe_upgrade(), *s1.unsafe_upgrade())));
+                            format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
                         *(self.stack.last_mut().unwrap()) = Value::String(result.into());
                         "".to_owned()
                     } else {
@@ -442,6 +451,21 @@ mod tests {
                 "print x;",
             ]),
             "4",
+        )
+    }
+
+    #[test]
+    fn local_variables() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "{",
+                "  var x = 4;",
+                "  print x;",
+                "}",
+                "print x;",
+            ]),
+            "42",
         )
     }
 }

@@ -6,16 +6,22 @@ use num_traits::FromPrimitive;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, GcWeak, Line, OpCode};
+use crate::rslox::compiled::chunk::{Chunk, Line, OpCode};
 
 pub fn parse(lexems: Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Parser::new(lexems).parse())
 }
 
+type Depth = i64;
+
+const UNINITIALIZED: Depth = -1;
+
 struct Parser {
     chunk: Chunk,
     tokens: Vec<Token>,
     current: usize,
+    locals: Vec<(String, Depth)>,
+    depth: Depth,
 }
 
 #[repr(u8)]
@@ -62,24 +68,20 @@ type CanAssign = bool;
 
 impl Parser {
     pub fn new(lexems: Vec<Token>) -> Self {
-        Parser { chunk: Chunk::new(), tokens: lexems, current: 0 }
+        Parser { chunk: Chunk::new(), tokens: lexems, current: 0, locals: Vec::new(), depth: 0 }
     }
 
     pub fn parse(mut self) -> Result<Chunk, NonEmpty<ParserError>> {
-        let mut line: Line = 0;
+        let mut last_line: Line = 0;
         let mut errors = Vec::new();
         while !self.is_at_end() {
-            match self.declaration() {
-                Ok(l) => line = l,
-                Err(err) => {
-                    errors.push(err);
-                    self.synchronize();
-                }
+            if let Some(line) = self.declaration(&mut errors) {
+                last_line = line;
             }
         }
         match NonEmpty::from_vec(errors) {
             None => {
-                self.chunk.write(OpCode::Return, line);
+                self.chunk.write(OpCode::Return, last_line);
                 Ok(self.chunk)
             }
             Some(errs) => Err(errs),
@@ -98,47 +100,92 @@ impl Parser {
         }
     }
 
-    fn declaration(&mut self) -> Result<Line, ParserError> {
-        self.statement()
+    fn declaration(&mut self, errors: &mut Vec<ParserError>) -> Option<Line> {
+        match self.statement() {
+            Ok(l) => Some(l),
+            Err(errs) => {
+                for err in errs {
+                    errors.push(err);
+                }
+                self.synchronize();
+                None
+            }
+        }
     }
 
-    fn statement(&mut self) -> Result<Line, ParserError> {
+    fn statement(&mut self) -> Result<Line, NonEmpty<ParserError>> {
         let line = if let Some(line) = self.matches(TokenType::Print) {
-            self.parse_expression()?;
+            self.parse_expression().map_err(NonEmpty::new)?;
             self.chunk.write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::Var) {
-            self.variable(line, true: CanAssign)?;
+            self.variable(true: CanAssign).map_err(NonEmpty::new)?;
             line
+        } else if let Some(line) = self.matches(TokenType::OpenBrace) {
+            self.depth += 1;
+            let mut errors = Vec::new();
+            while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
+                self.declaration(&mut errors);
+            }
+            assert!(self.depth > 0);
+            self.consume(TokenType::CloseBrace, None).map_err(NonEmpty::new)?;
+            return match NonEmpty::from_vec(errors) {
+                None => {
+                    while self.locals.last().map(|e| e.1).contains(&self.depth) {
+                        self.chunk.write(OpCode::Pop, line);
+                        self.locals.pop().unwrap();
+                    }
+                    self.depth -= 1;
+                    Ok(line) // Skip the semicolon
+                }
+                Some(errs) => Err(errs),
+            };
         } else {
-            let line = self.parse_expression()?;
+            let line = self.parse_expression().map_err(NonEmpty::new)?;
             self.chunk.write(OpCode::Pop, line);
             line
         };
-        self.consume(TokenType::Semicolon, None)?;
+        self.consume(TokenType::Semicolon, None).map_err(NonEmpty::new)?;
         Ok(line)
     }
 
-    fn variable(&mut self, line: Line, can_assign: bool) -> Result<(), ParserError> {
-        let global: GcWeak<String> = self.parse_variable()?;
+    fn variable(&mut self, can_assign: bool) -> Result<(), ParserError> {
+        let Token { r#type, line } = self.advance();
+        let name = match r#type {
+            TokenType::Identifier(name) => Ok(name),
+            e => Err(ParserError {
+                message: format!("Expected Identifier for variable, got '{:?}'", e),
+                token: Token { r#type: e, line },
+            })
+        }?;
+        if self.depth > 0 {
+            self.locals.push((name.clone(), UNINITIALIZED));
+        }
         if can_assign && self.matches(TokenType::Equal).is_some() {
             self.parse_expression()
         } else {
             self.chunk.write(OpCode::Nil, line);
             Ok(line)
         }?;
-        self.chunk.write(OpCode::DefineGlobal(global), line);
-        Ok(())
-    }
-
-    fn parse_variable(&mut self) -> Result<GcWeak<String>, ParserError> {
-        let Token { r#type, line } = self.advance();
-        match r#type {
-            TokenType::Identifier(name) => Ok(self.chunk.define_global(name)),
-            e => Err(ParserError {
-                message: format!("Expected Identifier for variable, got '{:?}'", e),
-                token: Token { r#type: e, line },
-            })
+        if self.depth == 0 {
+            let global = self.chunk.define_global(name);
+            self.chunk.write(OpCode::DefineGlobal(global), line);
+            Ok(())
+        } else {
+            for (local_name, depth) in self.locals.iter().rev() {
+                if depth < &self.depth {
+                    break;
+                }
+                if &name == local_name {
+                    return Err(ParserError {
+                        message: format!("Redefined Variable '{}' in same scope", name),
+                        token: Token { r#type: TokenType::identifier(name), line },
+                    });
+                }
+            }
+            assert_eq!(self.locals.last().unwrap().0, name);
+            self.locals.last_mut().unwrap().1 = self.depth;
+            Ok(())
         }
     }
 
@@ -162,8 +209,15 @@ impl Parser {
                 self.chunk.write_constant(num, line);
             }
             TokenType::Identifier(name) => {
-                let global = self.chunk.define_global(name);
-                self.chunk.write(OpCode::Identifier(global), line);
+                match self.resolve_local(&name, &line)? {
+                    Some(index) => {
+                        self.chunk.write(OpCode::LocalIdentifier(index), line)
+                    }
+                    None => {
+                        let global = self.chunk.define_global(name);
+                        self.chunk.write(OpCode::GlobalIdentifier(global), line);
+                    }
+                }
             }
             TokenType::StringLiteral(str) => {
                 self.chunk.add_string(str, line);
@@ -218,6 +272,21 @@ impl Parser {
             }
         }
         Ok(last_line)
+    }
+
+    fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, ParserError> {
+        for (i, (local_name, depth)) in self.locals.iter().rev().enumerate() {
+            if depth == &UNINITIALIZED {
+                return Err(ParserError::new(
+                    format!("Expression uses uninitialized local variable '{}'", name),
+                    Token::new(*line, TokenType::identifier(name)),
+                ));
+            }
+            if name == local_name {
+                return Ok(Some(i));
+            }
+        }
+        return Ok(None);
     }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), ParserError> {
@@ -394,9 +463,21 @@ mod tests {
     }
 
     #[test]
-    fn foo() {
+    fn invalid_assignment_target() {
         let msg =
             parse(unsafe_tokenize(vec!["a*b = c+d;"])).unwrap_err().unwrap_single().get_message();
         assert_msg_contains!(msg, "Invalid assignment target")
+    }
+
+    #[test]
+    fn uninitialized_variable() {
+        let msg =
+            parse(unsafe_tokenize(vec![
+                "var a = 42;",
+                "{",
+                "  var a = a;",
+                "}",
+            ])).unwrap_err().unwrap_single().get_message();
+        assert_msg_contains!(msg, "uninitialized local variable")
     }
 }
