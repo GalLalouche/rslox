@@ -1,6 +1,7 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::rc::{Rc, Weak};
 
@@ -31,12 +32,20 @@ impl Borrow<str> for GcRc<String> {
 // Weak that is garbage collected, and is therefore deref-able to plain old value, with the risk of
 // panic-ing for catching programmer errors. Basically here for PartialEq implementation. I'm sure
 // there's a good reason why it's not implemented for plain old Weak :\
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GcWeak<A>(Weak<A>);
 
 impl<A> GcWeak<A> {
     pub fn unwrap_upgrade(&self) -> Rc<A> {
         self.0.upgrade().unwrap()
+    }
+}
+
+impl <A: Debug> Debug for GcWeak<A> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GcWeak")
+            .field("0", &self.0.upgrade())
+            .finish()
     }
 }
 
@@ -70,8 +79,10 @@ pub enum OpCode {
     // While "Weak", this is never expected to actually point to null as Strings are only
     // "uninterested" when garbage collected.
     String(GcWeak<String>),
-    GlobalIdentifier(GcWeak<String>),
-    LocalIdentifier(StackLocation),
+    GetGlobal(GcWeak<String>),
+    SetGlobal(GcWeak<String>),
+    GetLocal(StackLocation),
+    SetLocal(StackLocation),
     Nil,
     Add,
     Subtract,

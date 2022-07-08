@@ -247,13 +247,24 @@ impl Parser {
                 self.chunk.write_constant(num, line);
             }
             TokenType::Identifier(name) => {
+                let is_assignment = can_assign && self.matches(TokenType::Equal).is_some();
                 match self.resolve_local(&name, &line)? {
                     Some(index) => {
-                        self.chunk.write(OpCode::LocalIdentifier(index), line)
+                        if is_assignment {
+                            self.parse_expression()?;
+                            self.chunk.write(OpCode::SetLocal(index), line)
+                        } else {
+                            self.chunk.write(OpCode::GetLocal(index), line)
+                        }
                     }
                     None => {
                         let global = self.chunk.define_global(name);
-                        self.chunk.write(OpCode::GlobalIdentifier(global), line);
+                        if is_assignment {
+                            self.parse_expression()?;
+                            self.chunk.write(OpCode::SetGlobal(global), line);
+                        } else {
+                            self.chunk.write(OpCode::GetGlobal(global), line);
+                        }
                     }
                 }
             }

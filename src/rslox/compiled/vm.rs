@@ -129,24 +129,36 @@ impl VirtualMachine {
                     ip = *index;
                     format!("{}", index)
                 }
-                OpCode::GlobalIdentifier(name) => {
+                OpCode::GetGlobal(name) => {
                     let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref())
                         .ok_or(VmError(format!("Unrecognized identifier '{}'", rc), *line))?;
                     self.stack.push(value.clone());
                     format!("'{}'", name.unwrap_upgrade())
                 }
-                OpCode::LocalIdentifier(index) => {
-                    self.stack.push(self.stack.get(*index).unwrap().clone());
-                    format!("{}", index)
-                }
                 OpCode::DefineGlobal(name) => {
                     let value = self.stack.pop().unwrap();
                     self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value);
                     format!("'{}'", name.unwrap_upgrade())
                 }
+                OpCode::SetGlobal(name) => {
+                    // We not pop on assignment, to allow for chaining.
+                    let value = self.stack.last().unwrap();
+                    self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
+                    format!("'{}'", name.unwrap_upgrade())
+                }
                 OpCode::DefineLocal(index) => {
                     (*self.stack.get_mut(*index).unwrap()) = self.stack.last().unwrap().clone();
+                    format!("{}", index)
+                }
+                OpCode::GetLocal(index) => {
+                    self.stack.push(self.stack.get(*index).unwrap().clone());
+                    format!("{}", index)
+                }
+                OpCode::SetLocal(index) => {
+                    // We not pop on assignment, to allow for chaining.
+                    let value = self.stack.last().unwrap();
+                    *self.stack.get_mut(*index).unwrap() = value.clone();
                     format!("{}", index)
                 }
                 OpCode::Bool(bool) => {
@@ -454,7 +466,7 @@ mod tests {
     }
 
     #[test]
-    fn variable_redeclaration() {
+    fn global_variable_redeclaration() {
         assert_eq!(
             printed_string(vec![
                 "var x = 4;",
@@ -463,6 +475,52 @@ mod tests {
                 "print x;",
             ]),
             "42",
+        )
+    }
+
+    #[test]
+    fn global_variable_assignment() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 4;",
+                "print x;",
+                "x = 2;",
+                "print x;",
+            ]),
+            "42",
+        )
+    }
+
+    #[test]
+    fn local_variable_assignment() {
+        assert_eq!(
+            printed_string(vec![
+                "{",
+                "  var x = 4;",
+                "  print x;",
+                "  x = 2;",
+                "  print x;",
+                "}",
+            ]),
+            "42",
+        )
+    }
+
+    #[test]
+    fn chaining_assignment() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 1;",
+                "{",
+                "  var y = 2;",
+                "  var z = 3;",
+                "  y = x = z = 4;",
+                "  print x;",
+                "  print y;",
+                "  print z;",
+                "}",
+            ]),
+            "444",
         )
     }
 
