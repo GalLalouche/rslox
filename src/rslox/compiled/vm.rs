@@ -454,6 +454,19 @@ mod tests {
     }
 
     #[test]
+    fn variable_redeclaration() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 4;",
+                "print x;",
+                "var x = 2;",
+                "print x;",
+            ]),
+            "42",
+        )
+    }
+
+    #[test]
     fn local_variables() {
         assert_eq!(
             printed_string(vec![

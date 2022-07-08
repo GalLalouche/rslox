@@ -110,7 +110,7 @@ impl Parser {
         }
         if let Some(line) = self.matches(TokenType::Var) {
             match self
-                .variable(true: CanAssign)
+                .declare_variable(true: CanAssign)
                 .and_then(|_| self.consume(TokenType::Semicolon, None)) {
                 Ok(_) => Some(line),
                 Err(e) => push_single!(e),
@@ -186,7 +186,7 @@ impl Parser {
         Ok(line)
     }
 
-    fn variable(&mut self, can_assign: bool) -> Result<(), ParserError> {
+    fn declare_variable(&mut self, can_assign: bool) -> Result<(), ParserError> {
         let Token { r#type, line } = self.advance();
         let name = match r#type {
             TokenType::Identifier(name) => Ok(name),
@@ -209,13 +209,14 @@ impl Parser {
             self.chunk.write(OpCode::DefineGlobal(global), line);
             Ok(())
         } else {
-            for (local_name, depth) in self.locals.iter().rev() {
+            // Skipping the first element because that is the current (uninitialized) local.
+            for (local_name, depth) in self.locals.iter().rev().skip(1) {
                 if depth < &self.depth {
                     break;
                 }
                 if &name == local_name {
                     return Err(ParserError {
-                        message: format!("Redefined Variable '{}' in same scope", name),
+                        message: format!("Redefined variable '{}' in same scope", name),
                         token: Token { r#type: TokenType::identifier(name), line },
                     });
                 }
@@ -518,6 +519,19 @@ mod tests {
                 "}",
             ])).unwrap_err().unwrap_single().get_message(),
             "uninitialized local variable"
+        )
+    }
+
+    #[test]
+    fn local_variable_redeclaration() {
+        assert_msg_contains!(
+            parse(unsafe_tokenize(vec![
+                "{",
+                "  var a = 42;",
+                "  var a = 54;",
+                "}",
+            ])).unwrap_err().unwrap_single().get_message(),
+            "Redefined variable 'a' in same scope"
         )
     }
 
