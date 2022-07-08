@@ -266,7 +266,7 @@ mod tests {
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
         let parsed = unsafe_parse(lines);
-        // Comment this in for debugging the compiled program.
+        // // Comment this in for debugging the compiled program.
         // use std::iter::Enumerate;
         // use std::slice::Iter;
         // use crate::rslox::common::utils::debug_mk_string;
@@ -605,6 +605,58 @@ mod tests {
             printed_string(vec![
                 "var x = 0;",
                 "while (x < 3) {",
+                "  print x;",
+                "  x = x + 1;",
+                "}",
+            ]),
+            "012",
+        )
+    }
+
+    #[test]
+    fn for_loop() {
+        assert_eq!(
+            printed_string(vec![
+                "for (var x = 0; x < 3; x = x + 1) {",
+                "  print x;",
+                "}",
+            ]),
+            "012",
+        )
+    }
+
+    #[test]
+    fn for_loop_no_init() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 0;",
+                "for (; x < 3; x = x + 1) {",
+                "  print x;",
+                "}",
+            ]),
+            "012",
+        )
+    }
+
+    #[test]
+    fn for_loop_no_post() {
+        assert_eq!(
+            printed_string(vec![
+                "for (var x = 0; x < 3;) {",
+                "  print x;",
+                "  x = x + 1;",
+                "}",
+            ]),
+            "012",
+        )
+    }
+
+    #[test]
+    fn for_loop_no_init_no_post() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 0;",
+                "for (;x < 3;) {",
                 "  print x;",
                 "  x = x + 1;",
                 "}",

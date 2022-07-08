@@ -109,9 +109,7 @@ impl Parser {
             }};
         }
         if let Some(line) = self.matches(TokenType::Var) {
-            match self
-                .declare_variable(true: CanAssign)
-                .and_then(|_| self.consume(TokenType::Semicolon, None)) {
+            match self.declare_variable(true: CanAssign) {
                 Ok(_) => Some(line),
                 Err(e) => push_single!(e),
             }
@@ -138,8 +136,10 @@ impl Parser {
             return self.if_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::While) {
             return self.while_stmt(line); // Skips semicolon
+        } else if let Some(line) = self.matches(TokenType::For) {
+            return self.for_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::OpenBrace) {
-            self.depth += 1;
+            self.begin_scope();
             let mut errors = Vec::new();
             while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
                 self.declaration(&mut errors);
@@ -148,32 +148,38 @@ impl Parser {
             // Skip the semicolon
             return match NonEmpty::from_vec(errors) {
                 None => {
-                    while self.locals.last().map(|e| e.1).contains(&self.depth) {
-                        self.chunk.write(OpCode::Pop, line);
-                        self.locals.pop().unwrap();
-                    }
-                    assert!(self.depth > 0);
-                    self.depth -= 1;
+                    self.end_scope(line);
                     Ok(line)
                 }
                 Some(errs) => Err(errs),
             };
         } else {
-            let line = self.parse_expression().map_err(NonEmpty::new)?;
-            self.chunk.write(OpCode::Pop, line);
-            line
+            self.expression_statement().map_err(NonEmpty::new)?
         };
         self.consume(TokenType::Semicolon, None).map_err(NonEmpty::new)?;
         Ok(line)
+    }
+
+    fn end_scope(&mut self, line: Line) {
+        assert!(self.depth > 0);
+        while self.locals.last().map(|e| e.1).contains(&self.depth) {
+            self.chunk.write(OpCode::Pop, line);
+            self.locals.pop().unwrap();
+        }
+        self.depth -= 1;
+    }
+
+    fn begin_scope(&mut self) {
+        self.depth += 1;
     }
 
     fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
         self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
         self.parse_expression().map_err(NonEmpty::new)?;
         self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
-        self.patch_jump(line, 1, OpCode::JumpIfFalse)?;
+        self.jumping_body(line, 1, OpCode::JumpIfFalse)?;
         if let Some(line) = self.matches(TokenType::Else) {
-            self.patch_jump(line, 0, OpCode::Jump)?;
+            self.jumping_body(line, 0, OpCode::Jump)?;
         }
         Ok(line)
     }
@@ -183,24 +189,79 @@ impl Parser {
         let body_start = self.chunk.code.len();
         self.parse_expression().map_err(NonEmpty::new)?;
         self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
-        self.patch_jump(line, 1, OpCode::JumpIfFalse)?;
+        self.jumping_body(line, 1, OpCode::JumpIfFalse)?;
         self.chunk.write(OpCode::Jump(body_start), line);
         Ok(line)
     }
 
+    fn for_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
+        self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
+        // Initializer
+        self.begin_scope();
+        if self.matches(TokenType::Semicolon).is_some() {
+            Ok(())
+        } else if self.matches(TokenType::Var).is_some() {
+            self.declare_variable(true: CanAssign).map_err(NonEmpty::new)
+        } else {
+            self.expression_statement().map_err(NonEmpty::new).map(|_| ())
+        }?;
+        // Condition
+        let loop_start = self.chunk.code.len();
+        let condition_jump: Option<CodeLocation> =
+            if self.matches(TokenType::Semicolon).is_some() {
+                None
+            } else {
+                self.parse_expression().map_err(NonEmpty::new)?;
+                self.consume(TokenType::Semicolon, None).map_err(NonEmpty::new)?;
+                let result = self.chunk.code.len();
+                self.chunk.write(OpCode::UnpatchedJump, line);
+                Some(result)
+            };
+        // Increment
+        let increment: Option<CodeLocation> =
+            if self.matches(TokenType::CloseParen).is_some() {
+                Ok::<Option<CodeLocation>, NonEmpty<ParserError>>(None)
+            } else {
+                let jump_over_increment = self.chunk.code.len();
+                self.chunk.write(OpCode::UnpatchedJump, line);
+                let result = self.chunk.code.len();
+                self.parse_expression().map_err(NonEmpty::new)?;
+                self.chunk.write(OpCode::Pop, line);
+                self.chunk.write(OpCode::Jump(loop_start), line);
+                self.patch_jump(jump_over_increment, self.chunk.code.len(), OpCode::Jump);
+                self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
+                Ok(Some(result))
+            }?;
+        self.statement()?;
+        if let Some(cond) = condition_jump {
+            self.patch_jump(cond, self.chunk.code.len() + 1, OpCode::JumpIfFalse);
+        }
+        if let Some(incr) = increment {
+            self.chunk.write(OpCode::Jump(incr), line);
+        } else {
+            self.chunk.write(OpCode::Jump(loop_start), line)
+        }
+        self.end_scope(line);
+        Ok(line)
+    }
+
+    fn patch_jump<F>(&mut self, source: CodeLocation, target: CodeLocation, ctor: F)
+        where F: FnOnce(CodeLocation) -> OpCode {
+        assert!(match self.chunk.code.get(source).unwrap().0 {
+            OpCode::UnpatchedJump => true,
+            _ => false,
+        });
+        (*self.chunk.code.get_mut(source).unwrap()).0 = ctor(target);
+    }
     // If new elements are added after this function has finished running, the jump should be after
     // those.
-    fn patch_jump<F>(&mut self, line: Line, offset: CodeLocation, ctor: F)
-                     -> Result<(), NonEmpty<ParserError>>
+    fn jumping_body<F>(&mut self, line: Line, offset: CodeLocation, ctor: F)
+                       -> Result<(), NonEmpty<ParserError>>
         where F: FnOnce(CodeLocation) -> OpCode {
         let jump_pos = self.chunk.code.len();
         self.chunk.write(OpCode::UnpatchedJump, line);
         self.statement()?;
-        assert!(match self.chunk.code.get(jump_pos).unwrap().0 {
-            OpCode::UnpatchedJump => true,
-            _ => false,
-        });
-        (*self.chunk.code.get_mut(jump_pos).unwrap()).0 = ctor(self.chunk.code.len() + offset);
+        self.patch_jump(jump_pos, self.chunk.code.len() + offset, ctor);
         Ok(())
     }
 
@@ -242,7 +303,16 @@ impl Parser {
             assert_eq!(self.locals.last().unwrap().0, name);
             self.locals.last_mut().unwrap().1 = self.depth;
             Ok(())
-        }
+        }.and_then(|result| {
+            self.consume(TokenType::Semicolon, None)?;
+            Ok(result)
+        })
+    }
+
+    fn expression_statement(&mut self) -> Result<Line, ParserError> {
+        let line = self.parse_expression()?;
+        self.chunk.write(OpCode::Pop, line);
+        Ok(line)
     }
 
     fn parse_expression(&mut self) -> Result<Line, ParserError> {
@@ -574,4 +644,5 @@ mod tests {
             "Unexpected 'Var'"
         )
     }
+    // TODO No condition tests will just result in an infinite loop until return inside functions is implemented.
 }
