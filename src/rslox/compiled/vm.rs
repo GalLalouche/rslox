@@ -90,10 +90,12 @@ impl VirtualMachine {
         let mut index: usize = 0;
         let mut previous_line: Line = 0;
         let Chunk { code, number_constants: constants, mut interned_strings, .. } = self.chunk;
-        for (op, line) in code {
+        let mut ip: usize = 0;
+        while ip < code.len() {
+            let (op, line) = code.get(ip).unwrap();
             let prefix = format!(
                 "{:>4}",
-                if index > 0 && line == previous_line {
+                if index > 0 && line == &previous_line {
                     "   |".to_owned()
                 } else {
                     line.to_string()
@@ -120,7 +122,7 @@ impl VirtualMachine {
                     "".to_owned()
                 }
                 OpCode::Constant(ptr) => {
-                    let value = constants.get(ptr).unwrap();
+                    let value = constants.get(*ptr).unwrap();
                     self.stack.push(Value::Number(*value));
                     format!(" {} '{}'", ptr, value)
                 }
@@ -128,13 +130,13 @@ impl VirtualMachine {
                     let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref()).ok_or(VmResult::RuntimeError {
                         message: format!("Unrecognized identifier '{}'", rc),
-                        line,
+                        line: *line,
                     })?;
                     self.stack.push(value.clone());
                     format!("'{}'", name.unwrap_upgrade())
                 }
                 OpCode::LocalIdentifier(index) => {
-                    self.stack.push(self.stack.get(index).unwrap().clone());
+                    self.stack.push(self.stack.get(*index).unwrap().clone());
                     format!("{}", index)
                 }
                 OpCode::DefineGlobal(name) => {
@@ -143,11 +145,11 @@ impl VirtualMachine {
                     format!("'{}'", name.unwrap_upgrade())
                 }
                 OpCode::DefineLocal(index) => {
-                    (*self.stack.get_mut(index).unwrap()) = self.stack.last().unwrap().clone();
+                    (*self.stack.get_mut(*index).unwrap()) = self.stack.last().unwrap().clone();
                     format!("{}", index)
                 }
                 OpCode::Bool(bool) => {
-                    self.stack.push(Value::Bool(bool));
+                    self.stack.push(Value::Bool(*bool));
                     format!("'{}'", bool)
                 }
                 OpCode::Nil => {
@@ -156,7 +158,7 @@ impl VirtualMachine {
                 }
                 OpCode::String(s) => {
                     let result = format!("'{}'", s.unwrap_upgrade());
-                    self.stack.push(Value::String(s));
+                    self.stack.push(Value::String(s.clone()));
                     result
                 }
                 OpCode::Equals => {
@@ -185,7 +187,7 @@ impl VirtualMachine {
                             TryInto::<GcWeak<String>>::try_into(self.stack.last().unwrap())
                                 .map_err(|err: String| VmResult::RuntimeError {
                                     message: format!("{} ({})", err, "String concat"),
-                                    line,
+                                    line: *line,
                                 })?;
                         let result = interned_strings.get_or_insert(Rc::new(
                             format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
@@ -229,7 +231,8 @@ impl VirtualMachine {
             ));
 
             index += 1;
-            previous_line = line;
+            previous_line = *line;
+            ip += 1;
         }
         Ok(result)
     }
