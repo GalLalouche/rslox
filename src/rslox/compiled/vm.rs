@@ -8,28 +8,16 @@ use std::stringify;
 use crate::rslox::compiled::chunk::{Chunk, GcWeak, Line, OpCode, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum VmResult {
-    CompileError { message: String, line: Line },
-    RuntimeError { message: String, line: Line },
-}
+struct VmError(String, Line);
 
-impl VmResult {
-    pub fn line(&self) -> Line {
-        match &self {
-            VmResult::CompileError { line, .. } => *line,
-            VmResult::RuntimeError { line, .. } => *line,
-        }
-    }
-}
-
-fn try_number(value: &Value, msg: &str, line: &Line) -> Result<f64, VmResult> {
+fn try_number(value: &Value, msg: &str, line: &Line) -> Result<f64, VmError> {
     let f: &f64 =
-        value.try_into().map_err(|err: String| VmResult::RuntimeError { message: format!("{} ({})", err, msg), line: *line })?;
+        value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))?;
     Ok(*f)
 }
 
-fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'a mut f64, VmResult> {
-    value.try_into().map_err(|err: String| VmResult::RuntimeError { message: format!("{} ({})", err, msg), line: *line })
+fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'a mut f64, VmError> {
+    value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))
 }
 
 #[derive(Debug)]
@@ -85,7 +73,7 @@ impl VirtualMachine {
     // In the book, the printing is a side-effect. That's not very testable. From a performance
     // point of view, there's nothing interesting about avoiding logs, so let's always do it.
     // (Where's that lazy Writer monad when you need it, amirite?)
-    pub fn disassemble(mut self, writer: &mut impl Write) -> Result<Vec<TracedCommand>, VmResult> {
+    pub fn disassemble(mut self, writer: &mut impl Write) -> Result<Vec<TracedCommand>, VmError> {
         let mut result = Vec::new();
         let mut index: usize = 0;
         let mut previous_line: Line = 0;
@@ -143,10 +131,8 @@ impl VirtualMachine {
                 }
                 OpCode::GlobalIdentifier(name) => {
                     let rc = name.unwrap_upgrade();
-                    let value = self.globals.get(rc.deref()).ok_or(VmResult::RuntimeError {
-                        message: format!("Unrecognized identifier '{}'", rc),
-                        line: *line,
-                    })?;
+                    let value = self.globals.get(rc.deref())
+                        .ok_or(VmError(format!("Unrecognized identifier '{}'", rc), *line))?;
                     self.stack.push(value.clone());
                     format!("'{}'", name.unwrap_upgrade())
                 }
@@ -200,10 +186,10 @@ impl VirtualMachine {
                         let s1: GcWeak<String> = TryInto::<GcWeak<String>>::try_into(popped).unwrap();
                         let s2: GcWeak<String> =
                             TryInto::<GcWeak<String>>::try_into(self.stack.last().unwrap())
-                                .map_err(|err: String| VmResult::RuntimeError {
-                                    message: format!("{} ({})", err, "String concat"),
-                                    line: *line,
-                                })?;
+                                .map_err(|err| VmError(
+                                    format!("{} ({})", err, "String concat"),
+                                    *line,
+                                ))?;
                         let result = interned_strings.get_or_insert(Rc::new(
                             format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
                         *(self.stack.last_mut().unwrap()) = Value::String(result.into());
@@ -273,7 +259,7 @@ mod tests {
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
 
-    fn single_error(lines: Vec<&str>) -> VmResult {
+    fn single_error(lines: Vec<&str>) -> VmError {
         VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut sink()).unwrap_err()
     }
 
@@ -364,7 +350,7 @@ mod tests {
         assert_eq!(
             single_error(vec![
                 "-false;",
-            ]).line(),
+            ]).1,
             1,
         )
     }
