@@ -101,14 +101,30 @@ impl Parser {
     }
 
     fn declaration(&mut self, errors: &mut Vec<ParserError>) -> Option<Line> {
-        match self.statement() {
-            Ok(l) => Some(l),
-            Err(errs) => {
-                for err in errs {
-                    errors.push(err);
-                }
+        macro_rules! push_single {
+            ($e:ident) => {{
+                errors.push($e);
                 self.synchronize();
                 None
+            }};
+        }
+        if let Some(line) = self.matches(TokenType::Var) {
+            match self
+                .variable(true: CanAssign)
+                .and_then(|_| self.consume(TokenType::Semicolon, None)) {
+                Ok(_) => Some(line),
+                Err(e) => push_single!(e),
+            }
+        } else {
+            match self.statement() {
+                Ok(l) => Some(l),
+                Err(errs) => {
+                    for err in errs {
+                        errors.push(err);
+                    }
+                    self.synchronize();
+                    None
+                }
             }
         }
     }
@@ -118,25 +134,43 @@ impl Parser {
             self.parse_expression().map_err(NonEmpty::new)?;
             self.chunk.write(OpCode::Print, line);
             line
-        } else if let Some(line) = self.matches(TokenType::Var) {
-            self.variable(true: CanAssign).map_err(NonEmpty::new)?;
-            line
+        } else if let Some(line) = self.matches(TokenType::If) {
+            self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
+            self.parse_expression().map_err(NonEmpty::new)?;
+            self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
+            let jump_pos = self.chunk.code.len();
+            self.chunk.write(OpCode::UnpatchedJump, line);
+            self.statement()?;
+            macro_rules! patch_jump {
+                ($jump_pos: ident, $op_code:path) => {
+                    assert!(match self.chunk.code.get(jump_pos).unwrap().0 {
+                        OpCode::UnpatchedJump => true,
+                        _ => false,
+                    });
+                    (*self.chunk.code.get_mut($jump_pos).unwrap()).0 =
+                        $op_code(self.chunk.code.len());
+                };
+            }
+            patch_jump!(jump_pos, OpCode::JumpIfFalse);
+            // Skip the semicolon
+            return Ok(line)
         } else if let Some(line) = self.matches(TokenType::OpenBrace) {
             self.depth += 1;
             let mut errors = Vec::new();
             while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
                 self.declaration(&mut errors);
             }
-            assert!(self.depth > 0);
             self.consume(TokenType::CloseBrace, None).map_err(NonEmpty::new)?;
+            // Skip the semicolon
             return match NonEmpty::from_vec(errors) {
                 None => {
                     while self.locals.last().map(|e| e.1).contains(&self.depth) {
                         self.chunk.write(OpCode::Pop, line);
                         self.locals.pop().unwrap();
                     }
+                    assert!(self.depth > 0);
                     self.depth -= 1;
-                    Ok(line) // Skip the semicolon
+                    Ok(line)
                 }
                 Some(errs) => Err(errs),
             };
@@ -471,13 +505,25 @@ mod tests {
 
     #[test]
     fn uninitialized_variable() {
-        let msg =
+        assert_msg_contains!(
             parse(unsafe_tokenize(vec![
                 "var a = 42;",
                 "{",
                 "  var a = a;",
                 "}",
-            ])).unwrap_err().unwrap_single().get_message();
-        assert_msg_contains!(msg, "uninitialized local variable")
+            ])).unwrap_err().unwrap_single().get_message(),
+            "uninitialized local variable"
+        )
+    }
+
+    #[test]
+    fn var_inside_if() {
+        assert_msg_contains!(
+            parse(unsafe_tokenize(vec![
+                "if (true)",
+                "  var x = 2;",
+            ])).unwrap_err().unwrap_single().get_message(),
+            "Unexpected 'Var'"
+        )
     }
 }

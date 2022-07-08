@@ -54,13 +54,15 @@ impl<A> PartialEq for GcWeak<A> {
     }
 }
 
+type CodeLocation = usize;
+type StackLocation = usize;
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
     Return,
     Pop,
     Print,
     DefineGlobal(GcWeak<String>),
-    DefineLocal(usize),
+    DefineLocal(StackLocation),
     Constant(Ptr),
     Bool(bool),
     // since std::String is already heap managed, we don't need a separate pointer here.
@@ -69,7 +71,7 @@ pub enum OpCode {
     // "uninterested" when garbage collected.
     String(GcWeak<String>),
     GlobalIdentifier(GcWeak<String>),
-    LocalIdentifier(usize),
+    LocalIdentifier(StackLocation),
     Nil,
     Add,
     Subtract,
@@ -80,6 +82,8 @@ pub enum OpCode {
     Equals,
     Less,
     Greater,
+    UnpatchedJump,
+    JumpIfFalse(CodeLocation),
 }
 
 impl Eq for &OpCode {}
@@ -150,6 +154,16 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
+        }
+    }
+    pub fn is_truthy(&self) -> bool {
+        !self.is_falsey()
+    }
+    pub fn is_falsey(&self) -> bool {
+        match &self {
+            Value::Nil => true,
+            Value::Bool(false) => true,
+            _ => false,
         }
     }
 }

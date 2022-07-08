@@ -126,6 +126,17 @@ impl VirtualMachine {
                     self.stack.push(Value::Number(*value));
                     format!(" {} '{}'", ptr, value)
                 }
+                OpCode::UnpatchedJump => {
+                    panic!("Jump should have been patched at line: '{}'", line)
+                }
+                OpCode::JumpIfFalse(index) => {
+                    assert!(*index > ip, "Jump target '{}' was smaller than ip '{}'", index, ip);
+                    let should_skip = self.stack.pop().unwrap().is_falsey();
+                    if should_skip {
+                        ip = *index
+                    }
+                    format!("{}", index)
+                }
                 OpCode::GlobalIdentifier(name) => {
                     let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref()).ok_or(VmResult::RuntimeError {
@@ -213,12 +224,7 @@ impl VirtualMachine {
                 }
                 OpCode::Not => {
                     let v = self.stack.last_mut().unwrap();
-                    let result = match &v {
-                        Value::Nil => true,
-                        Value::Bool(false) => true,
-                        _ => false,
-                    };
-                    *v = Value::Bool(result);
+                    *v = Value::Bool(v.is_falsey());
                     "".to_owned()
                 }
             });
@@ -469,6 +475,32 @@ mod tests {
                 "print x;",
             ]),
             "42",
+        )
+    }
+
+    #[test]
+    fn if_true_no_else() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "if (x) {",
+                "  print 42;",
+                "}",
+            ]),
+            "42",
+        )
+    }
+
+    #[test]
+    fn if_false_no_else() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "if (!x)",
+                "  print 42;",
+                "",
+            ]),
+            "",
         )
     }
 }
