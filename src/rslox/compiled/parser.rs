@@ -6,7 +6,7 @@ use num_traits::FromPrimitive;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, Line, OpCode};
+use crate::rslox::compiled::chunk::{Chunk, CodeLocation, Line, OpCode};
 
 pub fn parse(lexems: Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Parser::new(lexems).parse())
@@ -135,28 +135,9 @@ impl Parser {
             self.chunk.write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::If) {
-            self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
-            self.parse_expression().map_err(NonEmpty::new)?;
-            self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
-            macro_rules! patch_jump {
-                ($line:ident, $op_code:path) => {
-                    let jump_pos = self.chunk.code.len();
-                    self.chunk.write(OpCode::UnpatchedJump, $line);
-                    self.statement()?;
-                    assert!(match self.chunk.code.get(jump_pos).unwrap().0 {
-                        OpCode::UnpatchedJump => true,
-                        _ => false,
-                    });
-                    (*self.chunk.code.get_mut(jump_pos).unwrap()).0 =
-                        $op_code(self.chunk.code.len());
-                };
-            }
-            patch_jump!(line, OpCode::JumpIfFalse);
-            if let Some(line) = self.matches(TokenType::Else) {
-                patch_jump!(line, OpCode::Jump);
-            }
-            // Skip the semicolon
-            return Ok(line)
+            return self.if_stmt(line); // Skips semicolon
+        } else if let Some(line) = self.matches(TokenType::While) {
+            return self.while_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::OpenBrace) {
             self.depth += 1;
             let mut errors = Vec::new();
@@ -184,6 +165,43 @@ impl Parser {
         };
         self.consume(TokenType::Semicolon, None).map_err(NonEmpty::new)?;
         Ok(line)
+    }
+
+    fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
+        self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
+        self.parse_expression().map_err(NonEmpty::new)?;
+        self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
+        self.patch_jump(line, 1, OpCode::JumpIfFalse)?;
+        if let Some(line) = self.matches(TokenType::Else) {
+            self.patch_jump(line, 0, OpCode::Jump)?;
+        }
+        Ok(line)
+    }
+
+    fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
+        self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
+        let body_start = self.chunk.code.len();
+        self.parse_expression().map_err(NonEmpty::new)?;
+        self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
+        self.patch_jump(line, 1, OpCode::JumpIfFalse)?;
+        self.chunk.write(OpCode::Jump(body_start), line);
+        Ok(line)
+    }
+
+    // If new elements are added after this function has finished running, the jump should be after
+    // those.
+    fn patch_jump<F>(&mut self, line: Line, offset: CodeLocation, ctor: F)
+                     -> Result<(), NonEmpty<ParserError>>
+        where F: FnOnce(CodeLocation) -> OpCode {
+        let jump_pos = self.chunk.code.len();
+        self.chunk.write(OpCode::UnpatchedJump, line);
+        self.statement()?;
+        assert!(match self.chunk.code.get(jump_pos).unwrap().0 {
+            OpCode::UnpatchedJump => true,
+            _ => false,
+        });
+        (*self.chunk.code.get_mut(jump_pos).unwrap()).0 = ctor(self.chunk.code.len() + offset);
+        Ok(())
     }
 
     fn declare_variable(&mut self, can_assign: bool) -> Result<(), ParserError> {

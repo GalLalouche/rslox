@@ -26,3 +26,9 @@ impl<A: Debug> SliceExt<A> for NonEmpty<A> {
         self.first()
     }
 }
+
+pub fn debug_mk_string<'a, A: Debug + 'a, I>(i: &'a I) -> String
+    where &'a I: IntoIterator<Item=&'a A>
+{
+    i.into_iter().map(|e: &A| format!("{:?}", e)).collect::<Vec<_>>().join("\n")
+}

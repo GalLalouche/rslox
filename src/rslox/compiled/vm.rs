@@ -75,7 +75,6 @@ impl VirtualMachine {
     // (Where's that lazy Writer monad when you need it, amirite?)
     pub fn disassemble(mut self, writer: &mut impl Write) -> Result<Vec<TracedCommand>, VmError> {
         let mut result = Vec::new();
-        let mut index: usize = 0;
         let mut previous_line: Line = 0;
         let Chunk { code, number_constants: constants, mut interned_strings, .. } = self.chunk;
         let mut ip: usize = 0;
@@ -83,7 +82,7 @@ impl VirtualMachine {
             let (op, line) = code.get(ip).unwrap();
             let prefix = format!(
                 "{:>4}",
-                if index > 0 && line == &previous_line {
+                if ip > 0 && line == &previous_line {
                     "   |".to_owned()
                 } else {
                     line.to_string()
@@ -121,12 +120,12 @@ impl VirtualMachine {
                     assert!(*index > ip, "Jump target '{}' was smaller than ip '{}'", index, ip);
                     let should_skip = self.stack.pop().unwrap().is_falsey();
                     if should_skip {
-                        ip = *index
+                        ip = *index - 1; // ip will increase by one after we exit this pattern match.
                     }
                     format!("{}", index)
                 }
                 OpCode::Jump(index) => {
-                    ip = *index;
+                    ip = *index - 1; // ip will increase by one after we exit this pattern match.
                     format!("{}", index)
                 }
                 OpCode::GetGlobal(name) => {
@@ -238,7 +237,6 @@ impl VirtualMachine {
                     .collect(),
             ));
 
-            index += 1;
             previous_line = *line;
             ip += 1;
         }
@@ -267,7 +265,16 @@ mod tests {
 
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
-        VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut buff).unwrap();
+        let parsed = unsafe_parse(lines);
+        // Comment this in for debugging the compiled program.
+        // use std::iter::Enumerate;
+        // use std::slice::Iter;
+        // use crate::rslox::common::utils::debug_mk_string;
+        // eprintln!(
+        //     "parsed:\n{}",
+        //     debug_mk_string(&parsed.code.iter().enumerate().collect::<Vec<_>>()),
+        // );
+        VirtualMachine::new(parsed).disassemble(&mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
 
@@ -589,6 +596,20 @@ mod tests {
                 "else { print 54; }",
             ]),
             "54",
+        )
+    }
+
+    #[test]
+    fn while_loop() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 0;",
+                "while (x < 3) {",
+                "  print x;",
+                "  x = x + 1;",
+                "}",
+            ]),
+            "012",
         )
     }
 }

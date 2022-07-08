@@ -63,7 +63,7 @@ impl<A> PartialEq for GcWeak<A> {
     }
 }
 
-type CodeLocation = usize;
+pub type CodeLocation = usize;
 type StackLocation = usize;
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
