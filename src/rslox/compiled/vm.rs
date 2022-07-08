@@ -137,6 +137,10 @@ impl VirtualMachine {
                     }
                     format!("{}", index)
                 }
+                OpCode::Jump(index) => {
+                    ip = *index;
+                    format!("{}", index)
+                }
                 OpCode::GlobalIdentifier(name) => {
                     let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref()).ok_or(VmResult::RuntimeError {
@@ -501,6 +505,33 @@ mod tests {
                 "",
             ]),
             "",
+        )
+    }
+
+    #[test]
+    fn if_true_else() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "if (x) {",
+                "  print 42;",
+                "} else",
+                "  print 2;",
+            ]),
+            "42",
+        )
+    }
+
+    #[test]
+    fn if_false_else() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "if (!x)",
+                "  print 42;",
+                "else { print 54; }",
+            ]),
+            "54",
         )
     }
 }

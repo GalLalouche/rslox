@@ -83,6 +83,7 @@ pub enum OpCode {
     Less,
     Greater,
     UnpatchedJump,
+    Jump(CodeLocation),
     JumpIfFalse(CodeLocation),
 }
 

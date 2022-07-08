@@ -138,20 +138,23 @@ impl Parser {
             self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
             self.parse_expression().map_err(NonEmpty::new)?;
             self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
-            let jump_pos = self.chunk.code.len();
-            self.chunk.write(OpCode::UnpatchedJump, line);
-            self.statement()?;
             macro_rules! patch_jump {
-                ($jump_pos: ident, $op_code:path) => {
+                ($line:ident, $op_code:path) => {
+                    let jump_pos = self.chunk.code.len();
+                    self.chunk.write(OpCode::UnpatchedJump, $line);
+                    self.statement()?;
                     assert!(match self.chunk.code.get(jump_pos).unwrap().0 {
                         OpCode::UnpatchedJump => true,
                         _ => false,
                     });
-                    (*self.chunk.code.get_mut($jump_pos).unwrap()).0 =
+                    (*self.chunk.code.get_mut(jump_pos).unwrap()).0 =
                         $op_code(self.chunk.code.len());
                 };
             }
-            patch_jump!(jump_pos, OpCode::JumpIfFalse);
+            patch_jump!(line, OpCode::JumpIfFalse);
+            if let Some(line) = self.matches(TokenType::Else) {
+                patch_jump!(line, OpCode::Jump);
+            }
             // Skip the semicolon
             return Ok(line)
         } else if let Some(line) = self.matches(TokenType::OpenBrace) {
@@ -350,7 +353,9 @@ impl Parser {
     }
 
     fn matches(&mut self, tt: TokenType) -> Option<Line> {
-        if self.peek_type() == &tt {
+        if self.is_at_end() {
+            None
+        } else if self.peek_type() == &tt {
             let result = self.tokens[self.current].line;
             self.advance();
             Some(result)
