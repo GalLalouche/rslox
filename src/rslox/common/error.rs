@@ -47,3 +47,13 @@ impl LoxError for ParserError {
         self.message.to_owned()
     }
 }
+
+pub trait ToNonEmpty<B> {
+    fn to_nonempty(self) -> B;
+}
+
+impl <A, Err> ToNonEmpty<Result<A, NonEmpty<Err>>> for Result<A, Err> {
+    fn to_nonempty(self) -> Result<A, NonEmpty<Err>> {
+        self.map_err(NonEmpty::new)
+    }
+}

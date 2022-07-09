@@ -5,7 +5,10 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::stringify;
 
-use crate::rslox::compiled::chunk::{Chunk, GcWeak, Line, OpCode, Value};
+use crate::rslox::compiled::chunk::{Chunk, Line};
+use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::op_code::OpCode;
+use crate::rslox::compiled::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VmError(String, Line);
@@ -250,7 +253,7 @@ mod tests {
 
     use crate::assert_eq_vec;
     use crate::rslox::common::utils::SliceExt;
-    use crate::rslox::compiled::chunk::OpCode;
+    use crate::rslox::compiled::op_code::OpCode;
     use crate::rslox::compiled::tests::unsafe_parse;
 
     use super::*;

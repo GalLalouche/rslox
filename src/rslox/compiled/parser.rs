@@ -4,9 +4,10 @@ use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
 
-use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
+use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, CodeLocation, Line, OpCode};
+use crate::rslox::compiled::chunk::{Chunk, Line};
+use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
 
 pub fn parse(lexems: Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Parser::new(lexems).parse())
@@ -65,6 +66,7 @@ impl From<&TokenType> for Precedence {
 }
 
 type CanAssign = bool;
+type JumpOffset = usize;
 
 impl Parser {
     pub fn new(lexems: Vec<Token>) -> Self {
@@ -129,7 +131,7 @@ impl Parser {
 
     fn statement(&mut self) -> Result<Line, NonEmpty<ParserError>> {
         let line = if let Some(line) = self.matches(TokenType::Print) {
-            self.parse_expression().map_err(NonEmpty::new)?;
+            self.parse_expression().to_nonempty()?;
             self.chunk.write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::If) {
@@ -144,7 +146,7 @@ impl Parser {
             while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
                 self.declaration(&mut errors);
             }
-            self.consume(TokenType::CloseBrace, None).map_err(NonEmpty::new)?;
+            self.consume(TokenType::CloseBrace, None).to_nonempty()?;
             // Skip the semicolon
             return match NonEmpty::from_vec(errors) {
                 None => {
@@ -154,9 +156,9 @@ impl Parser {
                 Some(errs) => Err(errs),
             };
         } else {
-            self.expression_statement().map_err(NonEmpty::new)?
+            self.expression_statement().to_nonempty()?
         };
-        self.consume(TokenType::Semicolon, None).map_err(NonEmpty::new)?;
+        self.consume(TokenType::Semicolon, None).to_nonempty()?;
         Ok(line)
     }
 
@@ -174,94 +176,92 @@ impl Parser {
     }
 
     fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
-        self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
-        self.parse_expression().map_err(NonEmpty::new)?;
-        self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
-        self.jumping_body(line, 1, OpCode::JumpIfFalse)?;
+        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        self.parse_expression().to_nonempty()?;
+        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
         if let Some(line) = self.matches(TokenType::Else) {
-            self.jumping_body(line, 0, OpCode::Jump)?;
+            self.jumping_body(line, 0: JumpOffset, OpCode::Jump)?;
         }
         Ok(line)
     }
 
     fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
-        self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
-        let body_start = self.chunk.code.len();
-        self.parse_expression().map_err(NonEmpty::new)?;
-        self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
-        self.jumping_body(line, 1, OpCode::JumpIfFalse)?;
+        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        let body_start = self.chunk.next_location();
+        self.parse_expression().to_nonempty()?;
+        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
         self.chunk.write(OpCode::Jump(body_start), line);
         Ok(line)
     }
 
     fn for_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
-        self.consume(TokenType::OpenParen, None).map_err(NonEmpty::new)?;
+        self.consume(TokenType::OpenParen, None).to_nonempty()?;
         // Initializer
         self.begin_scope();
         if self.matches(TokenType::Semicolon).is_some() {
             Ok(())
         } else if self.matches(TokenType::Var).is_some() {
-            self.declare_variable(true: CanAssign).map_err(NonEmpty::new)
+            self.declare_variable(true: CanAssign).to_nonempty()
         } else {
-            self.expression_statement().map_err(NonEmpty::new).map(|_| ())
+            self.expression_statement().to_nonempty().map(|_| ())
         }?;
         // Condition
-        let loop_start = self.chunk.code.len();
+        let body_start = self.chunk.next_location();
         let condition_jump: Option<CodeLocation> =
             if self.matches(TokenType::Semicolon).is_some() {
                 None
             } else {
-                self.parse_expression().map_err(NonEmpty::new)?;
-                self.consume(TokenType::Semicolon, None).map_err(NonEmpty::new)?;
-                let result = self.chunk.code.len();
-                self.chunk.write(OpCode::UnpatchedJump, line);
-                Some(result)
+                self.parse_expression().to_nonempty()?;
+                self.consume(TokenType::Semicolon, None).to_nonempty()?;
+                Some(self.chunk.write(OpCode::UnpatchedJump, line))
             };
         // Increment
         let increment: Option<CodeLocation> =
             if self.matches(TokenType::CloseParen).is_some() {
                 Ok::<Option<CodeLocation>, NonEmpty<ParserError>>(None)
             } else {
-                let jump_over_increment = self.chunk.code.len();
-                self.chunk.write(OpCode::UnpatchedJump, line);
-                let result = self.chunk.code.len();
-                self.parse_expression().map_err(NonEmpty::new)?;
+                let jump_over_increment = self.chunk.write(OpCode::UnpatchedJump, line);
+                let result = self.chunk.next_location();
+                self.parse_expression().to_nonempty()?;
                 self.chunk.write(OpCode::Pop, line);
-                self.chunk.write(OpCode::Jump(loop_start), line);
-                self.patch_jump(jump_over_increment, self.chunk.code.len(), OpCode::Jump);
-                self.consume(TokenType::CloseParen, None).map_err(NonEmpty::new)?;
+                self.chunk.write(OpCode::Jump(body_start), line);
+                self.patch_jump(jump_over_increment, 0: JumpOffset, OpCode::Jump);
+                self.consume(TokenType::CloseParen, None).to_nonempty()?;
                 Ok(Some(result))
             }?;
         self.statement()?;
         if let Some(cond) = condition_jump {
-            self.patch_jump(cond, self.chunk.code.len() + 1, OpCode::JumpIfFalse);
+            self.patch_jump(cond, 1: JumpOffset, OpCode::JumpIfFalse);
         }
         if let Some(incr) = increment {
             self.chunk.write(OpCode::Jump(incr), line);
         } else {
-            self.chunk.write(OpCode::Jump(loop_start), line)
+            self.chunk.write(OpCode::Jump(body_start), line);
         }
         self.end_scope(line);
         Ok(line)
     }
 
-    fn patch_jump<F>(&mut self, source: CodeLocation, target: CodeLocation, ctor: F)
-        where F: FnOnce(CodeLocation) -> OpCode {
+    fn patch_jump<F: FnOnce(CodeLocation) -> OpCode>(
+        &mut self, source: CodeLocation, offset: JumpOffset, ctor: F,
+    ) {
         assert!(match self.chunk.code.get(source).unwrap().0 {
             OpCode::UnpatchedJump => true,
             _ => false,
         });
-        (*self.chunk.code.get_mut(source).unwrap()).0 = ctor(target);
+        (*self.chunk.code.get_mut(source).unwrap()).0 = ctor(self.chunk.next_location() + offset);
     }
+
     // If new elements are added after this function has finished running, the jump should be after
     // those.
-    fn jumping_body<F>(&mut self, line: Line, offset: CodeLocation, ctor: F)
-                       -> Result<(), NonEmpty<ParserError>>
-        where F: FnOnce(CodeLocation) -> OpCode {
-        let jump_pos = self.chunk.code.len();
-        self.chunk.write(OpCode::UnpatchedJump, line);
+    fn jumping_body<F: FnOnce(CodeLocation) -> OpCode>(
+        &mut self, line: Line, offset: JumpOffset, ctor: F,
+    ) -> Result<(), NonEmpty<ParserError>> {
+        let jump_pos = self.chunk.write(OpCode::UnpatchedJump, line);
         self.statement()?;
-        self.patch_jump(jump_pos, self.chunk.code.len() + offset, ctor);
+        self.patch_jump(jump_pos, offset, ctor);
         Ok(())
     }
 
@@ -340,9 +340,9 @@ impl Parser {
                     Some(index) => {
                         if is_assignment {
                             self.parse_expression()?;
-                            self.chunk.write(OpCode::SetLocal(index), line)
+                            self.chunk.write(OpCode::SetLocal(index), line);
                         } else {
-                            self.chunk.write(OpCode::GetLocal(index), line)
+                            self.chunk.write(OpCode::GetLocal(index), line);
                         }
                     }
                     None => {
@@ -394,7 +394,7 @@ impl Parser {
             };
             self.parse_precedence(next_precedence)?;
             match op {
-                Left(op) => self.chunk.write(op, line),
+                Left(op) => { self.chunk.write(op, line); }
                 Right(op) => {
                     self.chunk.write(op, line);
                     self.chunk.write(OpCode::Not, line);
