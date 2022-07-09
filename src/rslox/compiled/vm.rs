@@ -84,10 +84,7 @@ impl VirtualMachine {
             );
 
             let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
-                OpCode::Constant(ptr) => {
-                    let value = self.chunk.get_constant(ptr).unwrap();
-                    format!(" {} '{}'", ptr, value)
-                }
+                OpCode::Number(num) => format!(" {}", num),
                 OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
@@ -112,7 +109,7 @@ impl VirtualMachine {
 
     // Returns the final stack value
     pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
-        let Chunk { code, number_constants: constants, mut interned_strings, .. } = self.chunk;
+        let Chunk { code, mut interned_strings, .. } = self.chunk;
         let mut ip: usize = 0;
         while ip < code.len() {
             let (op, line) = code.get(ip).unwrap();
@@ -130,9 +127,7 @@ impl VirtualMachine {
                     let expr = self.stack.pop().unwrap();
                     write!(writer, "{}", expr.stringify()).expect("Not written");
                 }
-                OpCode::Constant(ptr) => {
-                    self.stack.push(Value::Number(*constants.get(*ptr).unwrap()));
-                }
+                OpCode::Number(num) => self.stack.push(Value::Number(*num)),
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {

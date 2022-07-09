@@ -332,7 +332,7 @@ impl Parser {
                 self.chunk.write(OpCode::Not, line);
             }
             TokenType::NumberLiteral(num) => {
-                self.chunk.write_constant(num, line);
+                self.chunk.write(OpCode::Number(num), line);
             }
             TokenType::Identifier(name) => {
                 let is_assignment = can_assign && self.matches(TokenType::Equal).is_some();
@@ -496,7 +496,7 @@ mod tests {
     #[test]
     fn constant() {
         let mut expected = Chunk::new();
-        expected.write_constant(123.0, 1);
+        expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn grouped_constant() {
         let mut expected = Chunk::new();
-        expected.write_constant(123.0, 1);
+        expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
@@ -520,7 +520,7 @@ mod tests {
     #[test]
     fn unary_minus() {
         let mut expected = Chunk::new();
-        expected.write_constant(123.0, 1);
+        expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
@@ -533,9 +533,9 @@ mod tests {
     #[test]
     fn basic_precedence() {
         let mut expected = Chunk::new();
-        expected.write_constant(1.0, 1);
+        expected.write(OpCode::Number(1.0), 1);
         expected.write(OpCode::Negate, 1);
-        expected.write_constant(2.0, 1);
+        expected.write(OpCode::Number(2.0), 1);
         expected.write(OpCode::Add, 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
@@ -548,9 +548,9 @@ mod tests {
     #[test]
     fn mixed_unary_and_binary() {
         let mut expected = Chunk::new();
-        expected.write_constant(1.0, 1);
+        expected.write(OpCode::Number(1.0), 1);
         expected.write(OpCode::Negate, 1);
-        expected.write_constant(2.0, 1);
+        expected.write(OpCode::Number(2.0), 1);
         expected.write(OpCode::Subtract, 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);

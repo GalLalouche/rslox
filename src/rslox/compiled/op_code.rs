@@ -1,7 +1,6 @@
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::tests::DeepEq;
 
-pub type Ptr = usize;
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
 
@@ -12,7 +11,7 @@ pub enum OpCode {
     Print,
     DefineGlobal(GcWeak<String>),
     DefineLocal(StackLocation),
-    Constant(Ptr),
+    Number(f64),
     Bool(bool),
     // since std::String is already heap managed, we don't need a separate pointer here.
     // Hurray for real languages!
@@ -60,7 +59,7 @@ impl OpCode {
             OpCode::Print => "PRINT",
             OpCode::DefineGlobal(_) => "DEFINE_GLOBAL",
             OpCode::DefineLocal(_) => "DEFINE_LOCAL",
-            OpCode::Constant(_) => "CONSTANT",
+            OpCode::Number(_) => "DEFINE_LOCAL",
             OpCode::Bool(_) => "BOOL",
             OpCode::String(_) => "STRING",
             OpCode::GetGlobal(_) => "GET_GLOBAL",
