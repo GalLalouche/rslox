@@ -62,139 +62,130 @@ struct TracedCommand {
     stack_state: Vec<TracedValue>,
 }
 
-impl TracedCommand {
-    pub fn new<S: Into<String>>(assembly: S, stack_state: Vec<TracedValue>) -> Self {
-        TracedCommand { assembly: assembly.into(), stack_state }
-    }
-}
-
 impl VirtualMachine {
     pub fn new(chunk: Chunk) -> Self {
         VirtualMachine { chunk, stack: Vec::new(), globals: HashMap::new() }
     }
 
-    // In the book, the printing is a side-effect. That's not very testable. From a performance
-    // point of view, there's nothing interesting about avoiding logs, so let's always do it.
-    // (Where's that lazy Writer monad when you need it, amirite?)
-    pub fn disassemble(mut self, writer: &mut impl Write) -> Result<Vec<TracedCommand>, VmError> {
+    #[cfg(test)]
+    fn disassemble(&self) -> String {
         let mut result = Vec::new();
         let mut previous_line: Line = 0;
-        let Chunk { code, number_constants: constants, mut interned_strings, .. } = self.chunk;
-        let mut ip: usize = 0;
-        while ip < code.len() {
-            let (op, line) = code.get(ip).unwrap();
+        let mut is_first = true;
+        for (i, (op, line)) in self.chunk.code.iter().enumerate() {
             let prefix = format!(
-                "{:>4}",
-                if ip > 0 && line == &previous_line {
-                    "   |".to_owned()
+                "{:0>2}: {:>2}",
+                i,
+                if !is_first && line == &previous_line {
+                    " |".to_owned()
                 } else {
                     line.to_string()
                 },
             );
 
+            let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
+                OpCode::Constant(ptr) => {
+                    let value = self.chunk.get_constant(ptr).unwrap();
+                    format!(" {} '{}'", ptr, value)
+                }
+                OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
+                OpCode::JumpIfFalse(index) => format!("{}", index),
+                OpCode::Jump(index) => format!("{}", index),
+                OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+                OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+                OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+                OpCode::DefineLocal(index) => format!("{}", index),
+                OpCode::GetLocal(index) => format!("{}", index),
+                OpCode::SetLocal(index) => format!("{}", index),
+                OpCode::Bool(bool) => format!("{}", bool),
+                OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
+                OpCode::Return | OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals |
+                OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
+                OpCode::Divide | OpCode::Negate | OpCode::Not => "".to_owned(),
+            });
+            result.push(command);
+            previous_line = *line;
+            is_first = false;
+        }
+        result.join("\n")
+    }
+
+    // Returns the final stack value
+    pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
+        let Chunk { code, number_constants: constants, mut interned_strings, .. } = self.chunk;
+        let mut ip: usize = 0;
+        while ip < code.len() {
+            let (op, line) = code.get(ip).unwrap();
             macro_rules! binary {
                 ($l:tt) => {{
                     let v1 = try_number(&self.stack.pop().unwrap(), stringify!($l), &line)?;
                     let v2 = try_number_mut(self.stack.last_mut().unwrap(), stringify!($l), &line)?;
                     *v2 $l v1;
-                    "".to_owned()
                 }}
             }
-            let command = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
-                OpCode::Return => "".to_owned(),
-                OpCode::Pop => {
-                    self.stack.pop().unwrap();
-                    "".to_owned()
-                }
+            match op {
+                OpCode::Return => (),
+                OpCode::Pop => { self.stack.pop().unwrap(); }
                 OpCode::Print => {
                     let expr = self.stack.pop().unwrap();
                     write!(writer, "{}", expr.stringify()).expect("Not written");
-                    "".to_owned()
                 }
                 OpCode::Constant(ptr) => {
-                    let value = constants.get(*ptr).unwrap();
-                    self.stack.push(Value::Number(*value));
-                    format!(" {} '{}'", ptr, value)
+                    self.stack.push(Value::Number(*constants.get(*ptr).unwrap()));
                 }
-                OpCode::UnpatchedJump => {
-                    panic!("Jump should have been patched at line: '{}'", line)
-                }
+                OpCode::UnpatchedJump =>
+                    panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
                     assert!(*index > ip, "Jump target '{}' was smaller than ip '{}'", index, ip);
                     let should_skip = self.stack.pop().unwrap().is_falsey();
                     if should_skip {
                         ip = *index - 1; // ip will increase by one after we exit this pattern match.
                     }
-                    format!("{}", index)
                 }
-                OpCode::Jump(index) => {
-                    ip = *index - 1; // ip will increase by one after we exit this pattern match.
-                    format!("{}", index)
-                }
+                OpCode::Jump(index) =>
+                    ip = *index - 1, // ip will increase by one after we exit this pattern match.
                 OpCode::GetGlobal(name) => {
                     let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref())
                         .ok_or(VmError(format!("Unrecognized identifier '{}'", rc), *line))?;
                     self.stack.push(value.clone());
-                    format!("'{}'", name.unwrap_upgrade())
                 }
                 OpCode::DefineGlobal(name) => {
                     let value = self.stack.pop().unwrap();
                     self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value);
-                    format!("'{}'", name.unwrap_upgrade())
                 }
                 OpCode::SetGlobal(name) => {
                     // We not pop on assignment, to allow for chaining.
                     let value = self.stack.last().unwrap();
                     self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
-                    format!("'{}'", name.unwrap_upgrade())
                 }
-                OpCode::DefineLocal(index) => {
-                    (*self.stack.get_mut(*index).unwrap()) = self.stack.last().unwrap().clone();
-                    format!("{}", index)
-                }
-                OpCode::GetLocal(index) => {
-                    self.stack.push(self.stack.get(*index).unwrap().clone());
-                    format!("{}", index)
-                }
+                OpCode::DefineLocal(index) =>
+                    (*self.stack.get_mut(*index).unwrap()) = self.stack.last().unwrap().clone(),
+                OpCode::GetLocal(index) => self.stack.push(self.stack.get(*index).unwrap().clone()),
                 OpCode::SetLocal(index) => {
                     // We not pop on assignment, to allow for chaining.
                     let value = self.stack.last().unwrap();
                     *self.stack.get_mut(*index).unwrap() = value.clone();
-                    format!("{}", index)
                 }
-                OpCode::Bool(bool) => {
-                    self.stack.push(Value::Bool(*bool));
-                    format!("'{}'", bool)
-                }
-                OpCode::Nil => {
-                    self.stack.push(Value::Nil);
-                    format!("nil")
-                }
-                OpCode::String(s) => {
-                    let result = format!("'{}'", s.unwrap_upgrade());
-                    self.stack.push(Value::String(s.clone()));
-                    result
-                }
+                OpCode::Bool(bool) => self.stack.push(Value::Bool(*bool)),
+                OpCode::Nil => self.stack.push(Value::Nil),
+                OpCode::String(s) => self.stack.push(Value::String(s.clone())),
                 OpCode::Equals => {
                     let v1 = self.stack.pop().unwrap();
                     let v2 = self.stack.last_mut().unwrap();
                     *v2 = Value::Bool(&v1 == v2);
-                    "".to_owned()
                 }
                 OpCode::Greater => {
                     let v1 = try_number(&self.stack.pop().unwrap(), "Greater lhs", &line)?;
                     let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Greater rhs", &line)?;
                     *(self.stack.last_mut().unwrap()) = Value::Bool(*v2 > v1);
-                    "".to_owned()
                 }
                 OpCode::Less => {
                     let v1 = try_number(&self.stack.pop().unwrap(), "Less lhs", &line)?;
                     let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Less rhs", &line)?;
                     *(self.stack.last_mut().unwrap()) = Value::Bool(*v2 < v1);
-                    "".to_owned()
                 }
-                OpCode::Add => {
+                OpCode::Add =>
                     if self.stack.last().unwrap().is_string() {
                         let popped = &self.stack.pop().unwrap();
                         let s1: GcWeak<String> = TryInto::<GcWeak<String>>::try_into(popped).unwrap();
@@ -207,43 +198,21 @@ impl VirtualMachine {
                         let result = interned_strings.get_or_insert(Rc::new(
                             format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
                         *(self.stack.last_mut().unwrap()) = Value::String(result.into());
-                        "".to_owned()
                     } else {
                         binary!(+=)
-                    }
-                }
-                OpCode::Subtract => {
-                    binary!(-=)
-                }
-                OpCode::Multiply => {
-                    binary!(*=)
-                }
-                OpCode::Divide => {
-                    binary!(/=)
-                }
-                OpCode::Negate => {
-                    let v = try_number_mut(self.stack.last_mut().unwrap(), "Negate", &line)?;
-                    *v *= -1.0;
-                    "".to_owned()
-                }
-                OpCode::Not => {
-                    let v = self.stack.last_mut().unwrap();
-                    *v = Value::Bool(v.is_falsey());
-                    "".to_owned()
-                }
-            });
-            result.push(TracedCommand::new(
-                command,
-                self.stack
-                    .iter()
-                    .map(|v| Into::<TracedValue>::into(v))
-                    .collect(),
-            ));
-
-            previous_line = *line;
+                    },
+                OpCode::Subtract => binary!(-=),
+                OpCode::Multiply => binary!(*=),
+                OpCode::Divide => binary!(/=),
+                OpCode::Negate =>
+                    *try_number_mut(self.stack.last_mut().unwrap(), "Negate", &line)? *= -1.0,
+                OpCode::Not =>
+                    *self.stack.last_mut().unwrap() =
+                        Value::Bool(self.stack.last_mut().unwrap().is_falsey()),
+            };
             ip += 1;
         }
-        Ok(result)
+        Ok(self.stack)
     }
 }
 
@@ -251,7 +220,6 @@ impl VirtualMachine {
 mod tests {
     use std::io::{Cursor, sink};
 
-    use crate::assert_eq_vec;
     use crate::rslox::common::utils::SliceExt;
     use crate::rslox::compiled::op_code::OpCode;
     use crate::rslox::compiled::tests::unsafe_parse;
@@ -259,82 +227,33 @@ mod tests {
     use super::*;
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
-        let stack = VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut sink()).unwrap();
+        // Remove the final POP to ensure the stack isn't empty
+        let mut parsed = unsafe_parse(lines);
+        assert!(match parsed.get(parsed.code.len() - 2).unwrap().0 {
+            OpCode::Pop => true,
+            _ => false
+        });
+        parsed.code.remove(parsed.code.len() - 2);
+        let stack = VirtualMachine::new(parsed).run(&mut sink()).unwrap();
         // Last is return, which as an empty, because second from last is pop, which will also end
         // with an empty stack.
-        let third_from_last = &stack.get(stack.len() - 3).unwrap();
-        third_from_last.stack_state.clone().unwrap_single().clone()
+        stack.unwrap_single().into()
     }
 
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
-        let parsed = unsafe_parse(lines);
+        let vm = VirtualMachine::new(unsafe_parse(lines));
         // // Comment this in for debugging the compiled program.
         // use std::iter::Enumerate;
         // use std::slice::Iter;
         // use crate::rslox::common::utils::debug_mk_string;
-        // eprintln!(
-        //     "parsed:\n{}",
-        //     debug_mk_string(&parsed.code.iter().enumerate().collect::<Vec<_>>()),
-        // );
-        VirtualMachine::new(parsed).disassemble(&mut buff).unwrap();
+        // eprintln!("disassembled:\n{}", vm.disassemble());
+        vm.run(&mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
 
     fn single_error(lines: Vec<&str>) -> VmError {
-        VirtualMachine::new(unsafe_parse(lines)).disassemble(&mut sink()).unwrap_err()
-    }
-
-    #[test]
-    fn basic_bytecode() {
-        let mut chunks = Chunk::new();
-        let constant = chunks.add_constant(1.2);
-        chunks.write(OpCode::Constant(constant), 123);
-
-        chunks.write(OpCode::Negate, 124);
-        chunks.write(OpCode::Return, 124);
-
-        assert_eq!(
-            VirtualMachine::new(chunks).disassemble(&mut sink()).unwrap(),
-            vec![
-                TracedCommand::new(" 123 OP_CONSTANT      0 '1.2'", vec![TracedValue::Number(1.2)]),
-                TracedCommand::new(" 124 OP_NEGATE       ", vec![TracedValue::Number(-1.2)]),
-                TracedCommand::new("   | OP_RETURN       ", vec![TracedValue::Number(-1.2)]),
-            ]
-        )
-    }
-
-    #[test]
-    fn binary_op() {
-        let mut chunks = Chunk::new();
-        let constant = chunks.add_constant(1.0);
-        chunks.write(OpCode::Constant(constant), 123);
-
-        let constant = chunks.add_constant(2.0);
-        chunks.write(OpCode::Constant(constant), 123);
-
-        chunks.write(OpCode::Add, 123);
-
-
-        let constant = chunks.add_constant(6.0);
-        chunks.write(OpCode::Constant(constant), 123);
-
-        chunks.write(OpCode::Divide, 123);
-        chunks.write(OpCode::Negate, 123);
-        chunks.write(OpCode::Return, 123);
-
-        assert_eq_vec!(
-            VirtualMachine::new(chunks).disassemble(&mut sink()).unwrap(),
-            vec![
-                TracedCommand::new(" 123 OP_CONSTANT      0 '1'", vec![TracedValue::Number(1.0)]),
-                TracedCommand::new("   | OP_CONSTANT      1 '2'", vec![TracedValue::Number(1.0), TracedValue::Number(2.0)]),
-                TracedCommand::new("   | OP_ADD          ", vec![TracedValue::Number(3.0)]),
-                TracedCommand::new("   | OP_CONSTANT      2 '6'", vec![TracedValue::Number(3.0), TracedValue::Number(6.0)]),
-                TracedCommand::new("   | OP_DIVIDE       ", vec![TracedValue::Number(0.5)]),
-                TracedCommand::new("   | OP_NEGATE       ", vec![TracedValue::Number(-0.5)]),
-                TracedCommand::new("   | OP_RETURN       ", vec![TracedValue::Number(-0.5)]),
-            ]
-        )
+        VirtualMachine::new(unsafe_parse(lines)).run(&mut sink()).unwrap_err()
     }
 
     #[test]
@@ -459,9 +378,8 @@ mod tests {
 
     #[test]
     fn stack_is_empty_after_statement() {
-        let stack: Vec<TracedCommand> = VirtualMachine::new(unsafe_parse(vec!["1 + 2;"]))
-            .disassemble(&mut sink()).unwrap();
-        assert_eq!(&stack.last().unwrap().stack_state.len(), &0);
+        let stack = VirtualMachine::new(unsafe_parse(vec!["1 + 2;"])).run(&mut sink()).unwrap();
+        assert_eq!(stack.len(), 0);
     }
 
     #[test]

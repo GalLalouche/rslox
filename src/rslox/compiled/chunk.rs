@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::rslox::compiled::gc::GcWeak;
-use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
+use crate::rslox::compiled::op_code::{CodeLocation, OpCode, Ptr};
 use crate::rslox::compiled::tests::DeepEq;
 
 // Overriding for Borrow
@@ -56,6 +56,12 @@ impl Chunk {
     pub fn define_global(&mut self, str: String) -> GcWeak<String> {
         (&self.globals.get_or_insert(GcRc(Rc::new(str))).0).into()
     }
+    pub fn get(&self, i: usize) -> Option<&(OpCode, Line)> {
+        self.code.get(i)
+    }
+    pub fn get_global(&self, str: &str) -> Option<Rc<String>> {
+        self.globals.get(str).map(|e| e.0.clone())
+    }
     pub fn add_string(&mut self, str: String, line: Line) {
         let entry = self.interned_strings.get_or_insert(Rc::new(str));
         self.code.push((OpCode::String(entry.into()), line))
@@ -63,6 +69,9 @@ impl Chunk {
     pub fn add_constant(&mut self, value: f64) -> usize {
         self.number_constants.push(value);
         return self.number_constants.len() - 1;
+    }
+    pub fn get_constant(&self, ptr: &Ptr) -> Option<f64> {
+        self.number_constants.get(*ptr).cloned()
     }
 }
 
