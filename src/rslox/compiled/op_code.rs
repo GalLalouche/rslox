@@ -1,4 +1,3 @@
-use convert_case::{Case, Casing};
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::tests::DeepEq;
 
@@ -55,13 +54,33 @@ impl DeepEq for OpCode {
 
 impl OpCode {
     pub fn to_upper_snake(&self) -> String {
-        format!("OP_{:13}",
-                format!("{:?}", self)
-                    .to_case(Case::UpperSnake)
-                    .chars()
-                    .into_iter()
-                    .take_while(|e| e.is_alphanumeric())
-                    .collect::<String>())
+        format!("{:15}", match self {
+            OpCode::Return => "RETURN",
+            OpCode::Pop => "POP",
+            OpCode::Print => "PRINT",
+            OpCode::DefineGlobal(_) => "DEFINE_GLOBAL",
+            OpCode::DefineLocal(_) => "DEFINE_LOCAL",
+            OpCode::Constant(_) => "CONSTANT",
+            OpCode::Bool(_) => "BOOL",
+            OpCode::String(_) => "STRING",
+            OpCode::GetGlobal(_) => "GET_GLOBAL",
+            OpCode::SetGlobal(_) => "SET_GLOBAL",
+            OpCode::GetLocal(_) => "GET_LOCAL",
+            OpCode::SetLocal(_) => "SET_LOCAL",
+            OpCode::Nil => "NIL",
+            OpCode::Add => "ADD",
+            OpCode::Subtract => "SUBTRACT",
+            OpCode::Multiply => "MULTIPLY",
+            OpCode::Divide => "DIVIDE",
+            OpCode::Negate => "NEGATE",
+            OpCode::Not => "NOT",
+            OpCode::Equals => "EQUALS",
+            OpCode::Less => "LESS",
+            OpCode::Greater => "GREATER",
+            OpCode::UnpatchedJump => "UNPATCHED_JUMP",
+            OpCode::Jump(_) => "JUMP",
+            OpCode::JumpIfFalse(_) => "JUMP_IF_FALSE",
+        })
     }
 }
 
