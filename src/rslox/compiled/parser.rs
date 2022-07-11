@@ -8,8 +8,9 @@ use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonE
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, Line};
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
+use crate::rslox::compiled::program::Program;
 
-pub fn parse(lexems: Vec<Token>) -> LoxResult<Chunk> {
+pub fn parse(lexems: Vec<Token>) -> LoxResult<Program> {
     convert_errors(Parser::new(lexems).parse())
 }
 
@@ -18,7 +19,7 @@ type Depth = i64;
 const UNINITIALIZED: Depth = -1;
 
 struct Parser {
-    chunk: Chunk,
+    program: Program,
     tokens: Vec<Token>,
     current: usize,
     locals: Vec<(String, Depth)>,
@@ -70,10 +71,10 @@ type JumpOffset = usize;
 
 impl Parser {
     pub fn new(lexems: Vec<Token>) -> Self {
-        Parser { chunk: Chunk::new(), tokens: lexems, current: 0, locals: Vec::new(), depth: 0 }
+        Parser { program: Program::new(), tokens: lexems, current: 0, locals: Vec::new(), depth: 0 }
     }
 
-    pub fn parse(mut self) -> Result<Chunk, NonEmpty<ParserError>> {
+    pub fn parse(mut self) -> Result<Program, NonEmpty<ParserError>> {
         let mut last_line: Line = 0;
         let mut errors = Vec::new();
         while !self.is_at_end() {
@@ -83,8 +84,8 @@ impl Parser {
         }
         match NonEmpty::from_vec(errors) {
             None => {
-                self.chunk.write(OpCode::Return, last_line);
-                Ok(self.chunk)
+                self.active_chunk().write(OpCode::Return, last_line);
+                Ok(self.program)
             }
             Some(errs) => Err(errs),
         }
@@ -132,7 +133,7 @@ impl Parser {
     fn statement(&mut self) -> Result<Line, NonEmpty<ParserError>> {
         let line = if let Some(line) = self.matches(TokenType::Print) {
             self.parse_expression().to_nonempty()?;
-            self.chunk.write(OpCode::Print, line);
+            self.active_chunk().write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::If) {
             return self.if_stmt(line); // Skips semicolon
@@ -165,7 +166,7 @@ impl Parser {
     fn end_scope(&mut self, line: Line) {
         assert!(self.depth > 0);
         while self.locals.last().map(|e| e.1).contains(&self.depth) {
-            self.chunk.write(OpCode::Pop, line);
+            self.active_chunk().write(OpCode::Pop, line);
             self.locals.pop().unwrap();
         }
         self.depth -= 1;
@@ -188,11 +189,11 @@ impl Parser {
 
     fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        let body_start = self.chunk.next_location();
+        let body_start = self.active_chunk().next_location();
         self.parse_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
-        self.chunk.write(OpCode::Jump(body_start), line);
+        self.active_chunk().write(OpCode::Jump(body_start), line);
         Ok(line)
     }
 
@@ -208,25 +209,25 @@ impl Parser {
             self.expression_statement().to_nonempty().map(|_| ())
         }?;
         // Condition
-        let body_start = self.chunk.next_location();
+        let body_start = self.active_chunk().next_location();
         let condition_jump: Option<CodeLocation> =
             if self.matches(TokenType::Semicolon).is_some() {
                 None
             } else {
                 self.parse_expression().to_nonempty()?;
                 self.consume(TokenType::Semicolon, None).to_nonempty()?;
-                Some(self.chunk.write(OpCode::UnpatchedJump, line))
+                Some(self.active_chunk().write(OpCode::UnpatchedJump, line))
             };
         // Increment
         let increment: Option<CodeLocation> =
             if self.matches(TokenType::CloseParen).is_some() {
                 Ok::<Option<CodeLocation>, NonEmpty<ParserError>>(None)
             } else {
-                let jump_over_increment = self.chunk.write(OpCode::UnpatchedJump, line);
-                let result = self.chunk.next_location();
+                let jump_over_increment = self.active_chunk().write(OpCode::UnpatchedJump, line);
+                let result = self.active_chunk().next_location();
                 self.parse_expression().to_nonempty()?;
-                self.chunk.write(OpCode::Pop, line);
-                self.chunk.write(OpCode::Jump(body_start), line);
+                self.active_chunk().write(OpCode::Pop, line);
+                self.active_chunk().write(OpCode::Jump(body_start), line);
                 self.patch_jump(jump_over_increment, 0: JumpOffset, OpCode::Jump);
                 self.consume(TokenType::CloseParen, None).to_nonempty()?;
                 Ok(Some(result))
@@ -236,9 +237,9 @@ impl Parser {
             self.patch_jump(cond, 1: JumpOffset, OpCode::JumpIfFalse);
         }
         if let Some(incr) = increment {
-            self.chunk.write(OpCode::Jump(incr), line);
+            self.active_chunk().write(OpCode::Jump(incr), line);
         } else {
-            self.chunk.write(OpCode::Jump(body_start), line);
+            self.active_chunk().write(OpCode::Jump(body_start), line);
         }
         self.end_scope(line);
         Ok(line)
@@ -247,11 +248,11 @@ impl Parser {
     fn patch_jump<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, source: CodeLocation, offset: JumpOffset, ctor: F,
     ) {
-        assert!(match self.chunk.code.get(source).unwrap().0 {
+        assert!(match self.active_chunk().0.get(source).unwrap().0 {
             OpCode::UnpatchedJump => true,
             _ => false,
         });
-        (*self.chunk.code.get_mut(source).unwrap()).0 = ctor(self.chunk.next_location() + offset);
+        (*self.active_chunk().0.get_mut(source).unwrap()).0 = ctor(self.active_chunk().next_location() + offset);
     }
 
     // If new elements are added after this function has finished running, the jump should be after
@@ -259,7 +260,7 @@ impl Parser {
     fn jumping_body<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, line: Line, offset: JumpOffset, ctor: F,
     ) -> Result<(), NonEmpty<ParserError>> {
-        let jump_pos = self.chunk.write(OpCode::UnpatchedJump, line);
+        let jump_pos = self.active_chunk().write(OpCode::UnpatchedJump, line);
         self.statement()?;
         self.patch_jump(jump_pos, offset, ctor);
         Ok(())
@@ -280,12 +281,12 @@ impl Parser {
         if can_assign && self.matches(TokenType::Equal).is_some() {
             self.parse_expression()
         } else {
-            self.chunk.write(OpCode::Nil, line);
+            self.active_chunk().write(OpCode::Nil, line);
             Ok(line)
         }?;
         if self.depth == 0 {
-            let global = self.chunk.define_global(name);
-            self.chunk.write(OpCode::DefineGlobal(global), line);
+            let global = self.program.define_global(name);
+            self.active_chunk().write(OpCode::DefineGlobal(global), line);
             Ok(())
         } else {
             // Skipping the first element because that is the current (uninitialized) local.
@@ -311,7 +312,7 @@ impl Parser {
 
     fn expression_statement(&mut self) -> Result<Line, ParserError> {
         let line = self.parse_expression()?;
-        self.chunk.write(OpCode::Pop, line);
+        self.active_chunk().write(OpCode::Pop, line);
         Ok(line)
     }
 
@@ -325,14 +326,14 @@ impl Parser {
         match r#type {
             TokenType::Minus => {
                 self.parse_precedence(Precedence::Unary)?;
-                self.chunk.write(OpCode::Negate, line);
+                self.active_chunk().write(OpCode::Negate, line);
             }
             TokenType::Bang => {
                 self.parse_precedence(Precedence::Unary)?;
-                self.chunk.write(OpCode::Not, line);
+                self.active_chunk().write(OpCode::Not, line);
             }
             TokenType::NumberLiteral(num) => {
-                self.chunk.write(OpCode::Number(num), line);
+                self.active_chunk().write(OpCode::Number(num), line);
             }
             TokenType::Identifier(name) => {
                 let is_assignment = can_assign && self.matches(TokenType::Equal).is_some();
@@ -340,25 +341,23 @@ impl Parser {
                     Some(index) => {
                         if is_assignment {
                             self.parse_expression()?;
-                            self.chunk.write(OpCode::SetLocal(index), line);
+                            self.active_chunk().write(OpCode::SetLocal(index), line);
                         } else {
-                            self.chunk.write(OpCode::GetLocal(index), line);
+                            self.active_chunk().write(OpCode::GetLocal(index), line);
                         }
                     }
                     None => {
-                        let global = self.chunk.define_global(name);
+                        let global = self.program.define_global(name);
                         if is_assignment {
                             self.parse_expression()?;
-                            self.chunk.write(OpCode::SetGlobal(global), line);
+                            self.active_chunk().write(OpCode::SetGlobal(global), line);
                         } else {
-                            self.chunk.write(OpCode::GetGlobal(global), line);
+                            self.active_chunk().write(OpCode::GetGlobal(global), line);
                         }
                     }
                 }
             }
-            TokenType::StringLiteral(str) => {
-                self.chunk.add_string(str, line);
-            }
+            TokenType::StringLiteral(str) => self.program.intern_string(str, line),
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
                     TokenType::True => OpCode::Bool(true),
@@ -366,7 +365,7 @@ impl Parser {
                     TokenType::Nil => OpCode::Nil,
                     _ => panic!(),
                 };
-                self.chunk.write(op, line);
+                self.active_chunk().write(op, line);
             }
             TokenType::OpenParen => {
                 self.parse_expression()?;
@@ -394,10 +393,10 @@ impl Parser {
             };
             self.parse_precedence(next_precedence)?;
             match op {
-                Left(op) => { self.chunk.write(op, line); }
+                Left(op) => { self.active_chunk().write(op, line); }
                 Right(op) => {
-                    self.chunk.write(op, line);
-                    self.chunk.write(OpCode::Not, line);
+                    self.active_chunk().write(op, line);
+                    self.active_chunk().write(OpCode::Not, line);
                 }
             }
             last_line = line;
@@ -409,6 +408,10 @@ impl Parser {
             }
         }
         Ok(last_line)
+    }
+
+    fn active_chunk(&mut self) -> &mut Chunk {
+        &mut self.program.chunk
     }
 
     fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, ParserError> {
@@ -500,7 +503,7 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["123;"]),
+            unsafe_parse(vec!["123;"]).chunk,
             expected,
         )
     }
@@ -512,7 +515,7 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            parse(unsafe_tokenize(vec!["(123);"])).unwrap(),
+            parse(unsafe_tokenize(vec!["(123);"])).unwrap().chunk,
             expected,
         )
     }
@@ -525,7 +528,7 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-123;"]),
+            unsafe_parse(vec!["-123;"]).chunk,
             expected,
         )
     }
@@ -540,7 +543,7 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-1+2;"]),
+            unsafe_parse(vec!["-1+2;"]).chunk,
             expected,
         )
     }
@@ -555,7 +558,7 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-1-2;"]),
+            unsafe_parse(vec!["-1-2;"]).chunk,
             expected,
         )
     }
@@ -590,11 +593,11 @@ mod tests {
     #[test]
     fn define_nil_var() {
         let parsed = unsafe_parse(vec!["var foo;"]);
-        let mut expected = Chunk::new();
+        let mut expected = Program::new();
         let w = expected.define_global("foo".to_owned());
-        expected.write(OpCode::Nil, 1);
-        expected.write(OpCode::DefineGlobal(w), 1);
-        expected.write(OpCode::Return, 1);
+        expected.chunk.write(OpCode::Nil, 1);
+        expected.chunk.write(OpCode::DefineGlobal(w), 1);
+        expected.chunk.write(OpCode::Return, 1);
         assert_deep_eq!(
             parsed,
             expected,
