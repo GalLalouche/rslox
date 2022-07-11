@@ -10,15 +10,17 @@ use crate::rslox::compiled::chunk::{Chunk, Line};
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
 use crate::rslox::compiled::program::Program;
 
-pub fn parse(lexems: Vec<Token>) -> LoxResult<Program> {
-    convert_errors(Parser::new(lexems).parse())
+type CompilerError = ParserError;
+pub fn compile(lexems: Vec<Token>) -> LoxResult<Program> {
+    convert_errors(Compiler::new(lexems).compile())
 }
 
 type Depth = i64;
 
 const UNINITIALIZED: Depth = -1;
 
-struct Parser {
+#[derive(Debug, Default)]
+struct Compiler {
     program: Program,
     tokens: Vec<Token>,
     current: usize,
@@ -69,12 +71,12 @@ impl From<&TokenType> for Precedence {
 type CanAssign = bool;
 type JumpOffset = usize;
 
-impl Parser {
+impl Compiler {
     pub fn new(lexems: Vec<Token>) -> Self {
-        Parser { program: Program::new(), tokens: lexems, current: 0, locals: Vec::new(), depth: 0 }
+        Compiler { tokens: lexems, ..Default::default() }
     }
 
-    pub fn parse(mut self) -> Result<Program, NonEmpty<ParserError>> {
+    pub fn compile(mut self) -> Result<Program, NonEmpty<CompilerError>> {
         let mut last_line: Line = 0;
         let mut errors = Vec::new();
         while !self.is_at_end() {
@@ -103,7 +105,7 @@ impl Parser {
         }
     }
 
-    fn declaration(&mut self, errors: &mut Vec<ParserError>) -> Option<Line> {
+    fn declaration(&mut self, errors: &mut Vec<CompilerError>) -> Option<Line> {
         macro_rules! push_single {
             ($e:ident) => {{
                 errors.push($e);
@@ -130,9 +132,9 @@ impl Parser {
         }
     }
 
-    fn statement(&mut self) -> Result<Line, NonEmpty<ParserError>> {
+    fn statement(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         let line = if let Some(line) = self.matches(TokenType::Print) {
-            self.parse_expression().to_nonempty()?;
+            self.compile_expression().to_nonempty()?;
             self.active_chunk().write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::If) {
@@ -176,9 +178,9 @@ impl Parser {
         self.depth += 1;
     }
 
-    fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
+    fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        self.parse_expression().to_nonempty()?;
+        self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
         if let Some(line) = self.matches(TokenType::Else) {
@@ -187,17 +189,17 @@ impl Parser {
         Ok(line)
     }
 
-    fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
+    fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
         let body_start = self.active_chunk().next_location();
-        self.parse_expression().to_nonempty()?;
+        self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
         self.active_chunk().write(OpCode::Jump(body_start), line);
         Ok(line)
     }
 
-    fn for_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<ParserError>> {
+    fn for_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
         // Initializer
         self.begin_scope();
@@ -214,18 +216,18 @@ impl Parser {
             if self.matches(TokenType::Semicolon).is_some() {
                 None
             } else {
-                self.parse_expression().to_nonempty()?;
+                self.compile_expression().to_nonempty()?;
                 self.consume(TokenType::Semicolon, None).to_nonempty()?;
                 Some(self.active_chunk().write(OpCode::UnpatchedJump, line))
             };
         // Increment
         let increment: Option<CodeLocation> =
             if self.matches(TokenType::CloseParen).is_some() {
-                Ok::<Option<CodeLocation>, NonEmpty<ParserError>>(None)
+                Ok::<Option<CodeLocation>, NonEmpty<CompilerError>>(None)
             } else {
                 let jump_over_increment = self.active_chunk().write(OpCode::UnpatchedJump, line);
                 let result = self.active_chunk().next_location();
-                self.parse_expression().to_nonempty()?;
+                self.compile_expression().to_nonempty()?;
                 self.active_chunk().write(OpCode::Pop, line);
                 self.active_chunk().write(OpCode::Jump(body_start), line);
                 self.patch_jump(jump_over_increment, 0: JumpOffset, OpCode::Jump);
@@ -248,29 +250,29 @@ impl Parser {
     fn patch_jump<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, source: CodeLocation, offset: JumpOffset, ctor: F,
     ) {
-        assert!(match self.active_chunk().0.get(source).unwrap().0 {
+        assert!(match self.active_chunk().get(source).unwrap().0 {
             OpCode::UnpatchedJump => true,
             _ => false,
         });
-        (*self.active_chunk().0.get_mut(source).unwrap()).0 = ctor(self.active_chunk().next_location() + offset);
+        (*self.active_chunk().get_mut(source).unwrap()).0 = ctor(self.active_chunk().next_location() + offset);
     }
 
     // If new elements are added after this function has finished running, the jump should be after
     // those.
     fn jumping_body<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, line: Line, offset: JumpOffset, ctor: F,
-    ) -> Result<(), NonEmpty<ParserError>> {
+    ) -> Result<(), NonEmpty<CompilerError>> {
         let jump_pos = self.active_chunk().write(OpCode::UnpatchedJump, line);
         self.statement()?;
         self.patch_jump(jump_pos, offset, ctor);
         Ok(())
     }
 
-    fn declare_variable(&mut self, can_assign: bool) -> Result<(), ParserError> {
+    fn declare_variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         let Token { r#type, line } = self.advance();
         let name = match r#type {
             TokenType::Identifier(name) => Ok(name),
-            e => Err(ParserError {
+            e => Err(CompilerError {
                 message: format!("Expected Identifier for variable, got '{:?}'", e),
                 token: Token { r#type: e, line },
             })
@@ -279,7 +281,7 @@ impl Parser {
             self.locals.push((name.clone(), UNINITIALIZED));
         }
         if can_assign && self.matches(TokenType::Equal).is_some() {
-            self.parse_expression()
+            self.compile_expression()
         } else {
             self.active_chunk().write(OpCode::Nil, line);
             Ok(line)
@@ -295,7 +297,7 @@ impl Parser {
                     break;
                 }
                 if &name == local_name {
-                    return Err(ParserError {
+                    return Err(CompilerError {
                         message: format!("Redefined variable '{}' in same scope", name),
                         token: Token { r#type: TokenType::identifier(name), line },
                     });
@@ -310,26 +312,26 @@ impl Parser {
         })
     }
 
-    fn expression_statement(&mut self) -> Result<Line, ParserError> {
-        let line = self.parse_expression()?;
+    fn expression_statement(&mut self) -> Result<Line, CompilerError> {
+        let line = self.compile_expression()?;
         self.active_chunk().write(OpCode::Pop, line);
         Ok(line)
     }
 
-    fn parse_expression(&mut self) -> Result<Line, ParserError> {
-        self.parse_precedence(Precedence::Assignment)
+    fn compile_expression(&mut self) -> Result<Line, CompilerError> {
+        self.compile_precedence(Precedence::Assignment)
     }
 
-    fn parse_precedence(&mut self, precedence: Precedence) -> Result<Line, ParserError> {
+    fn compile_precedence(&mut self, precedence: Precedence) -> Result<Line, CompilerError> {
         let can_assign = precedence <= Precedence::Assignment;
         let Token { line, r#type } = self.advance();
         match r#type {
             TokenType::Minus => {
-                self.parse_precedence(Precedence::Unary)?;
+                self.compile_precedence(Precedence::Unary)?;
                 self.active_chunk().write(OpCode::Negate, line);
             }
             TokenType::Bang => {
-                self.parse_precedence(Precedence::Unary)?;
+                self.compile_precedence(Precedence::Unary)?;
                 self.active_chunk().write(OpCode::Not, line);
             }
             TokenType::NumberLiteral(num) => {
@@ -340,7 +342,7 @@ impl Parser {
                 match self.resolve_local(&name, &line)? {
                     Some(index) => {
                         if is_assignment {
-                            self.parse_expression()?;
+                            self.compile_expression()?;
                             self.active_chunk().write(OpCode::SetLocal(index), line);
                         } else {
                             self.active_chunk().write(OpCode::GetLocal(index), line);
@@ -349,7 +351,7 @@ impl Parser {
                     None => {
                         let global = self.program.define_global(name);
                         if is_assignment {
-                            self.parse_expression()?;
+                            self.compile_expression()?;
                             self.active_chunk().write(OpCode::SetGlobal(global), line);
                         } else {
                             self.active_chunk().write(OpCode::GetGlobal(global), line);
@@ -368,11 +370,11 @@ impl Parser {
                 self.active_chunk().write(op, line);
             }
             TokenType::OpenParen => {
-                self.parse_expression()?;
+                self.compile_expression()?;
                 self.consume(TokenType::CloseParen, None)?;
             }
             e => return Err(
-                ParserError::new(format!("Unexpected '{:?}'", e), Token { r#type: e, line })),
+                CompilerError::new(format!("Unexpected '{:?}'", e), Token { r#type: e, line })),
         }
         let mut last_line = line;
         while !self.is_at_end() && precedence <= Precedence::from(self.peek_type()) {
@@ -391,7 +393,7 @@ impl Parser {
                 TokenType::GreaterEqual => Right(OpCode::Less),
                 _ => panic!()
             };
-            self.parse_precedence(next_precedence)?;
+            self.compile_precedence(next_precedence)?;
             match op {
                 Left(op) => { self.active_chunk().write(op, line); }
                 Right(op) => {
@@ -401,7 +403,7 @@ impl Parser {
             }
             last_line = line;
             if !self.is_at_end() && can_assign && self.peek_type() == &TokenType::Equal {
-                return Err(ParserError::new(
+                return Err(CompilerError::new(
                     "Invalid assignment target.",
                     self.tokens[self.current].clone(),
                 ));
@@ -414,10 +416,10 @@ impl Parser {
         &mut self.program.chunk
     }
 
-    fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, ParserError> {
+    fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, CompilerError> {
         for (i, (local_name, depth)) in self.locals.iter().rev().enumerate() {
             if depth == &UNINITIALIZED {
-                return Err(ParserError::new(
+                return Err(CompilerError::new(
                     format!("Expression uses uninitialized local variable '{}'", name),
                     Token::new(*line, TokenType::identifier(name)),
                 ));
@@ -429,10 +431,10 @@ impl Parser {
         return Ok(None);
     }
 
-    fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), ParserError> {
+    fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), CompilerError> {
         let expected_msg = msg.unwrap_or(expected.to_string());
         if self.is_at_end() {
-            return Err(ParserError::new(
+            return Err(CompilerError::new(
                 format!("Expected {}, but encountered end of file", expected_msg),
                 self.tokens.last().expect("empty tokens").to_owned(),
             ));
@@ -440,7 +442,7 @@ impl Parser {
 
         let token = self.advance();
         if token.r#type != expected {
-            Err(ParserError::new(
+            Err(CompilerError::new(
                 format!(
                     "Expected {}, but encountered {} at line {}",
                     expected_msg,
@@ -492,50 +494,50 @@ mod tests {
     use crate::{assert_deep_eq, assert_msg_contains};
     use crate::rslox::common::tests::unsafe_tokenize;
     use crate::rslox::common::utils::SliceExt;
-    use crate::rslox::compiled::tests::unsafe_parse;
+    use crate::rslox::compiled::tests::unsafe_compile;
 
     use super::*;
 
     #[test]
     fn constant() {
-        let mut expected = Chunk::new();
+        let mut expected: Chunk = Default::default();
         expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["123;"]).chunk,
+            unsafe_compile(vec!["123;"]).chunk,
             expected,
         )
     }
 
     #[test]
     fn grouped_constant() {
-        let mut expected = Chunk::new();
+        let mut expected: Chunk = Default::default();
         expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            parse(unsafe_tokenize(vec!["(123);"])).unwrap().chunk,
+            compile(unsafe_tokenize(vec!["(123);"])).unwrap().chunk,
             expected,
         )
     }
 
     #[test]
     fn unary_minus() {
-        let mut expected = Chunk::new();
+        let mut expected: Chunk = Default::default();
         expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-123;"]).chunk,
+            unsafe_compile(vec!["-123;"]).chunk,
             expected,
         )
     }
 
     #[test]
     fn basic_precedence() {
-        let mut expected = Chunk::new();
+        let mut expected: Chunk = Default::default();
         expected.write(OpCode::Number(1.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Number(2.0), 1);
@@ -543,14 +545,14 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-1+2;"]).chunk,
+            unsafe_compile(vec!["-1+2;"]).chunk,
             expected,
         )
     }
 
     #[test]
     fn mixed_unary_and_binary() {
-        let mut expected = Chunk::new();
+        let mut expected: Chunk = Default::default();
         expected.write(OpCode::Number(1.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Number(2.0), 1);
@@ -558,14 +560,14 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_parse(vec!["-1-2;"]).chunk,
+            unsafe_compile(vec!["-1-2;"]).chunk,
             expected,
         )
     }
 
     #[test]
     fn string_interning() {
-        let interned_strings = unsafe_parse(vec![r#""str" == "str";"#]).interned_strings;
+        let interned_strings = unsafe_compile(vec![r#""str" == "str";"#]).interned_strings;
         let mut expected = HashSet::new();
         expected.insert(Rc::new("str".to_owned()));
         assert_eq!(
@@ -576,7 +578,7 @@ mod tests {
 
     #[test]
     fn multiple_error_report() {
-        let vec: Vec<_> = parse(
+        let vec: Vec<_> = compile(
             unsafe_tokenize(
                 vec![
                     "1 +;",
@@ -592,14 +594,14 @@ mod tests {
 
     #[test]
     fn define_nil_var() {
-        let parsed = unsafe_parse(vec!["var foo;"]);
-        let mut expected = Program::new();
+        let compiled = unsafe_compile(vec!["var foo;"]);
+        let mut expected: Program = Default::default();
         let w = expected.define_global("foo".to_owned());
         expected.chunk.write(OpCode::Nil, 1);
         expected.chunk.write(OpCode::DefineGlobal(w), 1);
         expected.chunk.write(OpCode::Return, 1);
         assert_deep_eq!(
-            parsed,
+            compiled,
             expected,
         )
     }
@@ -607,14 +609,14 @@ mod tests {
     #[test]
     fn invalid_assignment_target() {
         let msg =
-            parse(unsafe_tokenize(vec!["a*b = c+d;"])).unwrap_err().unwrap_single().get_message();
+            compile(unsafe_tokenize(vec!["a*b = c+d;"])).unwrap_err().unwrap_single().get_message();
         assert_msg_contains!(msg, "Invalid assignment target")
     }
 
     #[test]
     fn uninitialized_variable() {
         assert_msg_contains!(
-            parse(unsafe_tokenize(vec![
+            compile(unsafe_tokenize(vec![
                 "var a = 42;",
                 "{",
                 "  var a = a;",
@@ -627,7 +629,7 @@ mod tests {
     #[test]
     fn local_variable_redeclaration() {
         assert_msg_contains!(
-            parse(unsafe_tokenize(vec![
+            compile(unsafe_tokenize(vec![
                 "{",
                 "  var a = 42;",
                 "  var a = 54;",
@@ -640,7 +642,7 @@ mod tests {
     #[test]
     fn var_inside_if() {
         assert_msg_contains!(
-            parse(unsafe_tokenize(vec![
+            compile(unsafe_tokenize(vec![
                 "if (true)",
                 "  var x = 2;",
             ])).unwrap_err().unwrap_single().get_message(),

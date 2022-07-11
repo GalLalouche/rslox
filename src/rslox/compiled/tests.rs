@@ -1,12 +1,12 @@
 use std::fmt::Debug;
 use crate::rslox::common::tests::unsafe_tokenize;
 use crate::rslox::compiled::chunk::Chunk;
-use crate::rslox::compiled::parser::parse;
+use crate::rslox::compiled::compiler::compile;
 use crate::rslox::compiled::program::Program;
 
 #[cfg(test)]
-pub fn unsafe_parse(program: Vec<&str>) -> Program {
-    parse(unsafe_tokenize(program)).expect("Failed to parse")
+pub fn unsafe_compile(program: Vec<&str>) -> Program {
+    compile(unsafe_tokenize(program)).expect("Failed to compile")
 }
 
 pub trait DeepEq: PartialEq {

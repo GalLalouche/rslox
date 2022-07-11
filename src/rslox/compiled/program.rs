@@ -27,7 +27,7 @@ impl Borrow<str> for GcRc<String> {
 
 pub type Line = usize;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Program {
     pub chunk: Chunk,
     pub interned_strings: HashSet<Rc<String>>,
@@ -35,13 +35,6 @@ pub struct Program {
 }
 
 impl Program {
-    pub fn new() -> Self {
-        Program {
-            chunk: Chunk::new(),
-            interned_strings: HashSet::new(),
-            globals: HashSet::new(),
-        }
-    }
     pub fn define_global(&mut self, str: String) -> GcWeak<String> {
         (&self.globals.get_or_insert(GcRc(Rc::new(str))).0).into()
     }

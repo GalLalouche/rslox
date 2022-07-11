@@ -24,7 +24,7 @@ fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'
     value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct VirtualMachine {
     program: Program,
     stack: Vec<Value>,
@@ -65,7 +65,7 @@ struct TracedCommand {
 
 impl VirtualMachine {
     pub fn new(program: Program) -> Self {
-        VirtualMachine { program, stack: Vec::new(), globals: HashMap::new() }
+        VirtualMachine { program, ..Default::default() }
     }
 
     #[cfg(test)]
@@ -73,7 +73,7 @@ impl VirtualMachine {
         let mut result = Vec::new();
         let mut previous_line: Line = 0;
         let mut is_first = true;
-        for (i, (op, line)) in self.program.chunk.0.iter().enumerate() {
+        for (i, (op, line)) in self.program.chunk.iter().enumerate() {
             let prefix = format!(
                 "{:0>2}: {:>2}",
                 i,
@@ -111,7 +111,7 @@ impl VirtualMachine {
     // Returns the final stack value
     pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
         let Program { chunk, mut interned_strings, .. } = self.program;
-        let code = chunk.0;
+        let code = chunk.code();
         let mut ip: usize = 0;
         while ip < code.len() {
             let (op, line) = code.get(ip).unwrap();
@@ -219,19 +219,19 @@ mod tests {
 
     use crate::rslox::common::utils::SliceExt;
     use crate::rslox::compiled::op_code::OpCode;
-    use crate::rslox::compiled::tests::unsafe_parse;
+    use crate::rslox::compiled::tests::unsafe_compile;
 
     use super::*;
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
         // Remove the final POP to ensure the stack isn't empty
-        let mut parsed = unsafe_parse(lines);
-        assert!(match parsed.chunk.0.get(parsed.chunk.0.len() - 2).unwrap().0 {
+        let mut compiled = unsafe_compile(lines);
+        assert!(match compiled.chunk.get(compiled.chunk.len() - 2).unwrap().0 {
             OpCode::Pop => true,
             _ => false
         });
-        parsed.chunk.0.remove(parsed.chunk.0.len() - 2);
-        let stack = VirtualMachine::new(parsed).run(&mut sink()).unwrap();
+        compiled.chunk.remove(compiled.chunk.len() - 2);
+        let stack = VirtualMachine::new(compiled).run(&mut sink()).unwrap();
         // Last is return, which as an empty, because second from last is pop, which will also end
         // with an empty stack.
         stack.unwrap_single().into()
@@ -239,7 +239,7 @@ mod tests {
 
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
-        let vm = VirtualMachine::new(unsafe_parse(lines));
+        let vm = VirtualMachine::new(unsafe_compile(lines));
         // // Comment this in for debugging the compiled program.
         // use std::iter::Enumerate;
         // use std::slice::Iter;
@@ -250,7 +250,7 @@ mod tests {
     }
 
     fn single_error(lines: Vec<&str>) -> VmError {
-        VirtualMachine::new(unsafe_parse(lines)).run(&mut sink()).unwrap_err()
+        VirtualMachine::new(unsafe_compile(lines)).run(&mut sink()).unwrap_err()
     }
 
     #[test]
@@ -375,7 +375,7 @@ mod tests {
 
     #[test]
     fn stack_is_empty_after_statement() {
-        let stack = VirtualMachine::new(unsafe_parse(vec!["1 + 2;"])).run(&mut sink()).unwrap();
+        let stack = VirtualMachine::new(unsafe_compile(vec!["1 + 2;"])).run(&mut sink()).unwrap();
         assert_eq!(stack.len(), 0);
     }
 

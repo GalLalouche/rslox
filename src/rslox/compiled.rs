@@ -1,7 +1,7 @@
 mod chunk;
 mod gc;
 mod op_code;
-mod parser;
+mod compiler;
 mod tests;
 mod value;
 mod vm;
