@@ -3,6 +3,7 @@ use std::mem;
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
+use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
@@ -114,7 +115,7 @@ impl Compiler {
             }};
         }
         if let Some(line) = self.matches(TokenType::Var) {
-            match self.declare_variable(true: CanAssign) {
+            match self.declare_variable(true as CanAssign) {
                 Ok(_) => Some(line),
                 Err(e) => push_single!(e),
             }
@@ -182,9 +183,9 @@ impl Compiler {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
         self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
-        self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
+        self.jumping_body(line, 1 as JumpOffset, OpCode::JumpIfFalse)?;
         if let Some(line) = self.matches(TokenType::Else) {
-            self.jumping_body(line, 0: JumpOffset, OpCode::Jump)?;
+            self.jumping_body(line, 0 as JumpOffset, OpCode::Jump)?;
         }
         Ok(line)
     }
@@ -194,7 +195,7 @@ impl Compiler {
         let body_start = self.active_chunk().next_location();
         self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
-        self.jumping_body(line, 1: JumpOffset, OpCode::JumpIfFalse)?;
+        self.jumping_body(line, 1 as JumpOffset, OpCode::JumpIfFalse)?;
         self.active_chunk().write(OpCode::Jump(body_start), line);
         Ok(line)
     }
@@ -206,7 +207,7 @@ impl Compiler {
         if self.matches(TokenType::Semicolon).is_some() {
             Ok(())
         } else if self.matches(TokenType::Var).is_some() {
-            self.declare_variable(true: CanAssign).to_nonempty()
+            self.declare_variable(true as CanAssign).to_nonempty()
         } else {
             self.expression_statement().to_nonempty().map(|_| ())
         }?;
@@ -230,13 +231,13 @@ impl Compiler {
                 self.compile_expression().to_nonempty()?;
                 self.active_chunk().write(OpCode::Pop, line);
                 self.active_chunk().write(OpCode::Jump(body_start), line);
-                self.patch_jump(jump_over_increment, 0: JumpOffset, OpCode::Jump);
+                self.patch_jump(jump_over_increment, 0 as JumpOffset, OpCode::Jump);
                 self.consume(TokenType::CloseParen, None).to_nonempty()?;
                 Ok(Some(result))
             }?;
         self.statement()?;
         if let Some(cond) = condition_jump {
-            self.patch_jump(cond, 1: JumpOffset, OpCode::JumpIfFalse);
+            self.patch_jump(cond, 1 as JumpOffset, OpCode::JumpIfFalse);
         }
         if let Some(incr) = increment {
             self.active_chunk().write(OpCode::Jump(incr), line);
