@@ -1,3 +1,4 @@
+use std::borrow::BorrowMut;
 use std::mem;
 
 use either::Either::{Left, Right};
@@ -10,8 +11,10 @@ use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, Line};
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
 use crate::rslox::compiled::program::Program;
+use crate::rslox::compiled::value::{Function};
 
 type CompilerError = ParserError;
+
 pub fn compile(lexems: Vec<Token>) -> LoxResult<Program> {
     convert_errors(Compiler::new(lexems).compile())
 }
@@ -23,8 +26,11 @@ const UNINITIALIZED: Depth = -1;
 #[derive(Debug, Default)]
 struct Compiler {
     program: Program,
+    functions: Vec<Chunk>,
     tokens: Vec<Token>,
+
     current: usize,
+
     locals: Vec<(String, Depth)>,
     depth: Depth,
 }
@@ -64,6 +70,7 @@ impl From<&TokenType> for Precedence {
             TokenType::LessEqual => Precedence::Comparison,
             TokenType::Greater => Precedence::Comparison,
             TokenType::GreaterEqual => Precedence::Comparison,
+            TokenType::OpenParen => Precedence::Call,
             _ => Precedence::TopLevel,
         }
     }
@@ -74,7 +81,7 @@ type JumpOffset = usize;
 
 impl Compiler {
     pub fn new(lexems: Vec<Token>) -> Self {
-        Compiler { tokens: lexems, ..Default::default() }
+        Compiler { tokens: lexems, functions: vec![Chunk::default()], ..Default::default() }
     }
 
     pub fn compile(mut self) -> Result<Program, NonEmpty<CompilerError>> {
@@ -88,6 +95,9 @@ impl Compiler {
         match NonEmpty::from_vec(errors) {
             None => {
                 self.active_chunk().write(OpCode::Return, last_line);
+                assert_eq!(self.functions.len(), 1);
+                let chunk = self.functions.pop().unwrap();
+                self.program.chunk = chunk;
                 Ok(self.program)
             }
             Some(errs) => Err(errs),
@@ -119,6 +129,18 @@ impl Compiler {
                 Ok(_) => Some(line),
                 Err(e) => push_single!(e),
             }
+        } else if let Some(line) = self.matches(TokenType::Fun) {
+            // TODO reduce duplication
+            match self.compile_function(line) {
+                Ok(_) => Some(line),
+                Err(errs) => {
+                    for err in errs {
+                        errors.push(err);
+                    }
+                    self.synchronize();
+                    None
+                }
+            }
         } else {
             match self.statement() {
                 Ok(l) => Some(l),
@@ -131,6 +153,36 @@ impl Compiler {
                 }
             }
         }
+    }
+
+    fn compile_function(&mut self, line: Line) -> Result<(), NonEmpty<CompilerError>> {
+        let (name, _) = self.identifier().to_nonempty()?;
+        let chunk = self.function(line)?;
+        let function = Function {
+            name: name.clone(),
+            arity: 0,
+            chunk,
+        };
+        // FIXME Not really for locals
+        let interned = self.program.intern_function(function);
+        self.active_chunk().write(OpCode::Function((&interned).into()), line);
+        if self.depth > 0 {
+            self.locals.push((name, self.depth));
+        } else {
+            let global = self.program.define_global(name);
+            self.active_chunk().write(OpCode::DefineGlobal(global), line);
+        }
+        Ok(())
+    }
+
+    fn function(&mut self, line: Line) -> Result<Chunk, NonEmpty<CompilerError>> {
+        self.begin_scope();
+        self.functions.push(Chunk::default());
+        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenBrace, None).to_nonempty()?;
+        self.block(line)?;
+        Ok(self.functions.pop().unwrap())
     }
 
     fn statement(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
@@ -146,24 +198,28 @@ impl Compiler {
             return self.for_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::OpenBrace) {
             self.begin_scope();
-            let mut errors = Vec::new();
-            while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
-                self.declaration(&mut errors);
-            }
-            self.consume(TokenType::CloseBrace, None).to_nonempty()?;
-            // Skip the semicolon
-            return match NonEmpty::from_vec(errors) {
-                None => {
-                    self.end_scope(line);
-                    Ok(line)
-                }
-                Some(errs) => Err(errs),
-            };
+            return self.block(line).map(|_| line);
         } else {
             self.expression_statement().to_nonempty()?
         };
         self.consume(TokenType::Semicolon, None).to_nonempty()?;
         Ok(line)
+    }
+
+    fn block(&mut self, line: Line) -> Result<(), NonEmpty<CompilerError>> {
+        let mut errors = Vec::new();
+        while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
+            self.declaration(&mut errors);
+        }
+        self.consume(TokenType::CloseBrace, None).to_nonempty()?;
+        // Skip the semicolon
+        return match NonEmpty::from_vec(errors) {
+            None => {
+                self.end_scope(line);
+                Ok(())
+            }
+            Some(errs) => Err(errs),
+        };
     }
 
     fn end_scope(&mut self, line: Line) {
@@ -270,14 +326,7 @@ impl Compiler {
     }
 
     fn declare_variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
-        let Token { r#type, line } = self.advance();
-        let name = match r#type {
-            TokenType::Identifier(name) => Ok(name),
-            e => Err(CompilerError {
-                message: format!("Expected Identifier for variable, got '{:?}'", e),
-                token: Token { r#type: e, line },
-            })
-        }?;
+        let (name, line) = self.identifier()?;
         if self.depth > 0 {
             self.locals.push((name.clone(), UNINITIALIZED));
         }
@@ -311,6 +360,17 @@ impl Compiler {
             self.consume(TokenType::Semicolon, None)?;
             Ok(result)
         })
+    }
+
+    fn identifier(&mut self) -> Result<(String, Line), CompilerError> {
+        let Token { r#type, line } = self.advance();
+        match r#type {
+            TokenType::Identifier(name) => Ok((name, line)),
+            e => Err(CompilerError {
+                message: format!("Expected Identifier for variable, got '{:?}'", e),
+                token: Token { r#type: e, line },
+            })
+        }
     }
 
     fn expression_statement(&mut self) -> Result<Line, CompilerError> {
@@ -360,7 +420,10 @@ impl Compiler {
                     }
                 }
             }
-            TokenType::StringLiteral(str) => self.program.intern_string(str, line),
+            TokenType::StringLiteral(str) => {
+                let str = self.program.intern_string(str);
+                self.active_chunk().write(OpCode::String((&str).into()), line);
+            }
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
                     TokenType::True => OpCode::Bool(true),
@@ -380,41 +443,46 @@ impl Compiler {
         let mut last_line = line;
         while !self.is_at_end() && precedence <= Precedence::from(self.peek_type()) {
             let Token { line, r#type } = self.advance();
-            let next_precedence = Precedence::from(&r#type).next().unwrap();
-            let op = match r#type {
-                TokenType::Minus => Left(OpCode::Subtract),
-                TokenType::Plus => Left(OpCode::Add),
-                TokenType::Slash => Left(OpCode::Divide),
-                TokenType::Star => Left(OpCode::Multiply),
-                TokenType::EqualEqual => Left(OpCode::Equals),
-                TokenType::Less => Left(OpCode::Less),
-                TokenType::Greater => Left(OpCode::Greater),
-                TokenType::BangEqual => Right(OpCode::Equals),
-                TokenType::LessEqual => Right(OpCode::Greater),
-                TokenType::GreaterEqual => Right(OpCode::Less),
-                _ => panic!()
-            };
-            self.compile_precedence(next_precedence)?;
-            match op {
-                Left(op) => { self.active_chunk().write(op, line); }
-                Right(op) => {
-                    self.active_chunk().write(op, line);
-                    self.active_chunk().write(OpCode::Not, line);
+            if r#type == TokenType::OpenParen {
+                self.active_chunk().write(OpCode::Call, line);
+                self.consume(TokenType::CloseParen, None)?;
+            } else {
+                let next_precedence = Precedence::from(&r#type).next().unwrap();
+                let op = match r#type {
+                    TokenType::Minus => Left(OpCode::Subtract),
+                    TokenType::Plus => Left(OpCode::Add),
+                    TokenType::Slash => Left(OpCode::Divide),
+                    TokenType::Star => Left(OpCode::Multiply),
+                    TokenType::EqualEqual => Left(OpCode::Equals),
+                    TokenType::Less => Left(OpCode::Less),
+                    TokenType::Greater => Left(OpCode::Greater),
+                    TokenType::BangEqual => Right(OpCode::Equals),
+                    TokenType::LessEqual => Right(OpCode::Greater),
+                    TokenType::GreaterEqual => Right(OpCode::Less),
+                    e => panic!("Unexpected operator '{:?}'", e),
+                };
+                self.compile_precedence(next_precedence)?;
+                match op {
+                    Left(op) => { self.active_chunk().write(op, line); }
+                    Right(op) => {
+                        self.active_chunk().write(op, line);
+                        self.active_chunk().write(OpCode::Not, line);
+                    }
                 }
-            }
-            last_line = line;
-            if !self.is_at_end() && can_assign && self.peek_type() == &TokenType::Equal {
-                return Err(CompilerError::new(
-                    "Invalid assignment target.",
-                    self.tokens[self.current].clone(),
-                ));
+                last_line = line;
+                if !self.is_at_end() && can_assign && self.peek_type() == &TokenType::Equal {
+                    return Err(CompilerError::new(
+                        "Invalid assignment target.",
+                        self.tokens[self.current].clone(),
+                    ));
+                }
             }
         }
         Ok(last_line)
     }
 
     fn active_chunk(&mut self) -> &mut Chunk {
-        &mut self.program.chunk
+        self.functions.last_mut().unwrap().borrow_mut()
     }
 
     fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, CompilerError> {
@@ -495,6 +563,7 @@ mod tests {
     use crate::{assert_deep_eq, assert_msg_contains};
     use crate::rslox::common::tests::unsafe_tokenize;
     use crate::rslox::common::utils::SliceExt;
+    use crate::rslox::compiled::op_code::OpCode;
     use crate::rslox::compiled::tests::unsafe_compile;
 
     use super::*;

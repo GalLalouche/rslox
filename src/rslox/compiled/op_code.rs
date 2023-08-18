@@ -1,5 +1,6 @@
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::tests::DeepEq;
+use crate::rslox::compiled::value::Function;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
@@ -18,11 +19,13 @@ pub enum OpCode {
     // While "Weak", this is never expected to actually point to null as Strings are only
     // "uninterested" when garbage collected.
     String(GcWeak<String>),
+    Function(GcWeak<Function>),
     GetGlobal(GcWeak<String>),
     SetGlobal(GcWeak<String>),
     GetLocal(StackLocation),
     SetLocal(StackLocation),
     Nil,
+    Call,
     Add,
     Subtract,
     Multiply,
@@ -62,11 +65,13 @@ impl OpCode {
             OpCode::Number(_) => "DEFINE_LOCAL",
             OpCode::Bool(_) => "BOOL",
             OpCode::String(_) => "STRING",
+            OpCode::Function(_) => "FUNCTION",
             OpCode::GetGlobal(_) => "GET_GLOBAL",
             OpCode::SetGlobal(_) => "SET_GLOBAL",
             OpCode::GetLocal(_) => "GET_LOCAL",
             OpCode::SetLocal(_) => "SET_LOCAL",
             OpCode::Nil => "NIL",
+            OpCode::Call => "CALL",
             OpCode::Add => "ADD",
             OpCode::Subtract => "SUBTRACT",
             OpCode::Multiply => "MULTIPLY",
@@ -82,4 +87,3 @@ impl OpCode {
         })
     }
 }
-

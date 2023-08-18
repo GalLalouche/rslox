@@ -1,7 +1,24 @@
 use std::borrow::BorrowMut;
 use std::convert::TryFrom;
 
+use crate::rslox::compiled::chunk::Chunk;
 use crate::rslox::compiled::gc::GcWeak;
+
+pub type Arity = usize;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Function {
+    // FIXME this should be interned
+    pub name: String,
+    pub arity: Arity,
+    pub chunk: Chunk,
+}
+
+impl Function {
+    pub fn new<S: Into<String>>(name: S, arity: Arity) -> Self {
+        Function { name: name.into(), arity, chunk: Default::default() }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -9,6 +26,7 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(GcWeak<String>),
+    Function(GcWeak<Function>),
 }
 
 impl PartialEq<Self> for Value {
@@ -43,6 +61,7 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
+            Value::Function(f) => format!("<fn {}>", f.unwrap_upgrade().name),
         }
     }
     pub fn is_truthy(&self) -> bool {

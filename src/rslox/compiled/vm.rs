@@ -5,7 +5,7 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::stringify;
 
-use crate::rslox::compiled::chunk::Line;
+use crate::rslox::compiled::chunk::{Chunk, Line};
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
 use crate::rslox::compiled::program::Program;
@@ -24,20 +24,35 @@ fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'
     value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))
 }
 
+type InstructionPointer = usize;
+#[derive(Debug)]
+struct CallFrame {
+    ip: InstructionPointer
+}
+
 #[derive(Debug, Default)]
 struct VirtualMachine {
     program: Program,
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
+    call_frames: Vec<CallFrame>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct TracedFunction {
+    name: String,
+    arity: usize,
+    chunk: Chunk,
 }
 
 // Copies all interned data locally.
 #[derive(Debug, Clone, PartialEq)]
-pub enum TracedValue {
+enum TracedValue {
     Number(f64),
     Bool(bool),
     Nil,
     String(String),
+    Function(TracedFunction),
 }
 
 impl From<&Value> for TracedValue {
@@ -47,6 +62,15 @@ impl From<&Value> for TracedValue {
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
             Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
+            Value::Function(f) => {
+                let rc = f.unwrap_upgrade();
+                TracedValue::Function(TracedFunction {
+                    name: rc.name.to_owned(),
+                    arity: rc.arity,
+                    chunk: rc.chunk.clone(),
+                }
+                )
+            }
         }
     }
 }
@@ -97,9 +121,10 @@ impl VirtualMachine {
                 OpCode::SetLocal(index) => format!("{}", index),
                 OpCode::Bool(bool) => format!("{}", bool),
                 OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
+                OpCode::Function(f) => format!("<fn '{}'>", f.unwrap_upgrade().name),
                 OpCode::Return | OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals |
                 OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
-                OpCode::Divide | OpCode::Negate | OpCode::Not => "".to_owned(),
+                OpCode::Divide | OpCode::Negate | OpCode::Not | OpCode::Call => "".to_owned(),
             });
             result.push(command);
             previous_line = *line;
@@ -112,7 +137,7 @@ impl VirtualMachine {
     pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
         let Program { chunk, mut interned_strings, .. } = self.program;
         let code = chunk.code();
-        let mut ip: usize = 0;
+        let mut ip: InstructionPointer = 0;
         while ip < code.len() {
             let (op, line) = code.get(ip).unwrap();
             macro_rules! binary {
@@ -167,6 +192,21 @@ impl VirtualMachine {
                 OpCode::Bool(bool) => self.stack.push(Value::Bool(*bool)),
                 OpCode::Nil => self.stack.push(Value::Nil),
                 OpCode::String(s) => self.stack.push(Value::String(s.clone())),
+                OpCode::Function(f) => self.stack.push(Value::Function(f.clone())),
+                OpCode::Call => {
+                    match self.stack.pop().unwrap() {
+                        Value::Function(f) => {
+                            self.call_frames.push(CallFrame{ip});
+                            let chunk = &f.unwrap_upgrade().chunk;
+                            c
+                        },
+                        e => todo!(),
+                        //     Err(VmError(
+                        //     format!("Cannot call non-callable '{:?}'", e),
+                        //     *line,
+                        // ))
+                    }
+                }
                 OpCode::Equals => {
                     let v1 = self.stack.pop().unwrap();
                     let v2 = self.stack.last_mut().unwrap();
@@ -240,11 +280,11 @@ mod tests {
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
         let vm = VirtualMachine::new(unsafe_compile(lines));
-        // // Comment this in for debugging the compiled program.
-        // use std::iter::Enumerate;
-        // use std::slice::Iter;
-        // use crate::rslox::common::utils::debug_mk_string;
-        // eprintln!("disassembled:\n{}", vm.disassemble());
+        // Comment this in for debugging the compiled program.
+        use std::iter::Enumerate;
+        use std::slice::Iter;
+        use crate::rslox::common::utils::debug_mk_string;
+        println!("disassembled:\n{}", vm.disassemble());
         vm.run(&mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
@@ -580,6 +620,19 @@ mod tests {
                 "}",
             ]),
             "012",
+        )
+    }
+
+    #[test]
+    fn basic_function() {
+        assert_eq!(
+            printed_string(vec![
+                "fun f() {",
+                r#"  print "foo";"#,
+                "}",
+                "f();",
+            ]),
+            "foo",
         )
     }
 }
