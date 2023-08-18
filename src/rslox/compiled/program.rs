@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::rc::Rc;
-use crate::rslox::compiled::chunk::Chunk;
 
+use crate::rslox::compiled::chunk::Chunk;
 use crate::rslox::compiled::gc::GcWeak;
-use crate::rslox::compiled::op_code::{OpCode};
+use crate::rslox::compiled::op_code::OpCode;
 use crate::rslox::compiled::tests::DeepEq;
 
 // Overriding for Borrow
