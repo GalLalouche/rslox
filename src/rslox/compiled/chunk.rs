@@ -34,6 +34,7 @@ pub struct Chunk {
 }
 
 pub type InternedString = GcWeak<String>;
+pub type InternedStrings = HashSet<Rc<String>>;
 
 impl Chunk {
     pub fn intern_string(&mut self, str: String) -> InternedString {
@@ -48,9 +49,9 @@ impl Chunk {
     pub fn remove(&mut self, i: usize) -> (OpCode, Line) { self.code.remove(i) }
     // This ensures all operations are done by the above methods, except the last phase of
     // deconstructing.
-    pub fn to_tuple(self) -> (Code, HashSet<Rc<String>>) { (self.code, self.interned_strings) }
+    pub fn to_tuple(self) -> (Code, InternedStrings) { (self.code, self.interned_strings) }
     pub fn get_code(&self) -> &Code { &self.code }
-    pub fn get_interned_strings(&self) -> &HashSet<Rc<String>> { &self.interned_strings }
+    pub fn get_interned_strings(&self) -> &InternedStrings { &self.interned_strings }
 }
 
 impl DeepEq for Chunk {
