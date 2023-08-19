@@ -40,18 +40,17 @@ impl Chunk {
     pub fn intern_string(&mut self, str: String) -> InternedString {
         GcWeak::from(self.interned_strings.get_or_insert(Rc::new(str)))
     }
+
     pub fn write(&mut self, op: OpCode, line: Line) -> CodeLocation {
         self.code.write(op, line)
     }
-    pub fn next_location(&self) -> CodeLocation { self.code.next_location() }
-    pub fn get(&self, i: usize) -> Option<&(OpCode, Line)> { self.code.get(i) }
     pub fn get_mut(&mut self, i: usize) -> Option<&mut (OpCode, Line)> { self.code.get_mut(i) }
     pub fn remove(&mut self, i: usize) -> (OpCode, Line) { self.code.remove(i) }
-    // This ensures all operations are done by the above methods, except the last phase of
-    // deconstructing.
-    pub fn to_tuple(self) -> (Code, InternedStrings) { (self.code, self.interned_strings) }
+
     pub fn get_code(&self) -> &Code { &self.code }
     pub fn get_interned_strings(&self) -> &InternedStrings { &self.interned_strings }
+
+    pub fn to_tuple(self) -> (Code, InternedStrings) { (self.code, self.interned_strings) }
 }
 
 impl DeepEq for Chunk {

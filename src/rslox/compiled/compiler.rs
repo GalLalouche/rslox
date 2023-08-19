@@ -194,7 +194,7 @@ impl Compiler {
 
     fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        let body_start = self.active_chunk().next_location();
+        let body_start = self.active_chunk().get_code().next_location();
         self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.jumping_body(line, 1 as JumpOffset, OpCode::JumpIfFalse)?;
@@ -214,7 +214,7 @@ impl Compiler {
             self.expression_statement().to_nonempty().map(|_| ())
         }?;
         // Condition
-        let body_start = self.active_chunk().next_location();
+        let body_start = self.active_chunk().get_code().next_location();
         let condition_jump: Option<CodeLocation> =
             if self.matches(TokenType::Semicolon).is_some() {
                 None
@@ -229,7 +229,7 @@ impl Compiler {
                 Ok::<Option<CodeLocation>, NonEmpty<CompilerError>>(None)
             } else {
                 let jump_over_increment = self.active_chunk().write(OpCode::UnpatchedJump, line);
-                let result = self.active_chunk().next_location();
+                let result = self.active_chunk().get_code().next_location();
                 self.compile_expression().to_nonempty()?;
                 self.active_chunk().write(OpCode::Pop, line);
                 self.active_chunk().write(OpCode::Jump(body_start), line);
@@ -253,11 +253,12 @@ impl Compiler {
     fn patch_jump<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, source: CodeLocation, offset: JumpOffset, ctor: F,
     ) {
-        assert!(match self.active_chunk().get(source).unwrap().0 {
+        assert!(match self.active_chunk().get_code().get(source).unwrap().0 {
             OpCode::UnpatchedJump => true,
             _ => false,
         });
-        (*self.active_chunk().get_mut(source).unwrap()).0 = ctor(self.active_chunk().next_location() + offset);
+        (*self.active_chunk().get_mut(source).unwrap()).0 =
+            ctor(self.active_chunk().get_code().next_location() + offset);
     }
 
     // If new elements are added after this function has finished running, the jump should be after
