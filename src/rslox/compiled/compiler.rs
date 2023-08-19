@@ -7,12 +7,12 @@ use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, Line};
+use crate::rslox::compiled::code::{Code, Line};
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
-use crate::rslox::compiled::program::Program;
+use crate::rslox::compiled::chunk::Chunk;
 
 type CompilerError = ParserError;
-pub fn compile(lexems: Vec<Token>) -> LoxResult<Program> {
+pub fn compile(lexems: Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Compiler::new(lexems).compile())
 }
 
@@ -22,7 +22,7 @@ const UNINITIALIZED: Depth = -1;
 
 #[derive(Debug, Default)]
 struct Compiler {
-    program: Program,
+    program: Chunk,
     tokens: Vec<Token>,
     current: usize,
     locals: Vec<(String, Depth)>,
@@ -77,7 +77,7 @@ impl Compiler {
         Compiler { tokens: lexems, ..Default::default() }
     }
 
-    pub fn compile(mut self) -> Result<Program, NonEmpty<CompilerError>> {
+    pub fn compile(mut self) -> Result<Chunk, NonEmpty<CompilerError>> {
         let mut last_line: Line = 0;
         let mut errors = Vec::new();
         while !self.is_at_end() {
@@ -413,8 +413,8 @@ impl Compiler {
         Ok(last_line)
     }
 
-    fn active_chunk(&mut self) -> &mut Chunk {
-        &mut self.program.chunk
+    fn active_chunk(&mut self) -> &mut Code {
+        &mut self.program.code
     }
 
     fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, CompilerError> {
@@ -501,44 +501,44 @@ mod tests {
 
     #[test]
     fn constant() {
-        let mut expected: Chunk = Default::default();
+        let mut expected: Code = Default::default();
         expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["123;"]).chunk,
+            unsafe_compile(vec!["123;"]).code,
             expected,
         )
     }
 
     #[test]
     fn grouped_constant() {
-        let mut expected: Chunk = Default::default();
+        let mut expected: Code = Default::default();
         expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            compile(unsafe_tokenize(vec!["(123);"])).unwrap().chunk,
+            compile(unsafe_tokenize(vec!["(123);"])).unwrap().code,
             expected,
         )
     }
 
     #[test]
     fn unary_minus() {
-        let mut expected: Chunk = Default::default();
+        let mut expected: Code = Default::default();
         expected.write(OpCode::Number(123.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["-123;"]).chunk,
+            unsafe_compile(vec!["-123;"]).code,
             expected,
         )
     }
 
     #[test]
     fn basic_precedence() {
-        let mut expected: Chunk = Default::default();
+        let mut expected: Code = Default::default();
         expected.write(OpCode::Number(1.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Number(2.0), 1);
@@ -546,14 +546,14 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["-1+2;"]).chunk,
+            unsafe_compile(vec!["-1+2;"]).code,
             expected,
         )
     }
 
     #[test]
     fn mixed_unary_and_binary() {
-        let mut expected: Chunk = Default::default();
+        let mut expected: Code = Default::default();
         expected.write(OpCode::Number(1.0), 1);
         expected.write(OpCode::Negate, 1);
         expected.write(OpCode::Number(2.0), 1);
@@ -561,7 +561,7 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["-1-2;"]).chunk,
+            unsafe_compile(vec!["-1-2;"]).code,
             expected,
         )
     }
@@ -596,11 +596,11 @@ mod tests {
     #[test]
     fn define_nil_var() {
         let compiled = unsafe_compile(vec!["var foo;"]);
-        let mut expected: Program = Default::default();
+        let mut expected: Chunk = Default::default();
         let w = expected.define_global("foo".to_owned());
-        expected.chunk.write(OpCode::Nil, 1);
-        expected.chunk.write(OpCode::DefineGlobal(w), 1);
-        expected.chunk.write(OpCode::Return, 1);
+        expected.code.write(OpCode::Nil, 1);
+        expected.code.write(OpCode::DefineGlobal(w), 1);
+        expected.code.write(OpCode::Return, 1);
         assert_deep_eq!(
             compiled,
             expected,

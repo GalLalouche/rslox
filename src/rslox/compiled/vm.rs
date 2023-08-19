@@ -5,10 +5,10 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::stringify;
 
-use crate::rslox::compiled::chunk::Line;
+use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
-use crate::rslox::compiled::program::Program;
+use crate::rslox::compiled::chunk::Chunk;
 use crate::rslox::compiled::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +26,7 @@ fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'
 
 #[derive(Debug, Default)]
 struct VirtualMachine {
-    program: Program,
+    program: Chunk,
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
 }
@@ -64,7 +64,7 @@ struct TracedCommand {
 }
 
 impl VirtualMachine {
-    pub fn new(program: Program) -> Self {
+    pub fn new(program: Chunk) -> Self {
         VirtualMachine { program, ..Default::default() }
     }
 
@@ -73,7 +73,7 @@ impl VirtualMachine {
         let mut result = Vec::new();
         let mut previous_line: Line = 0;
         let mut is_first = true;
-        for (i, (op, line)) in self.program.chunk.iter().enumerate() {
+        for (i, (op, line)) in self.program.code.iter().enumerate() {
             let prefix = format!(
                 "{:0>2}: {:>2}",
                 i,
@@ -110,11 +110,11 @@ impl VirtualMachine {
 
     // Returns the final stack value
     pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
-        let Program { chunk, mut interned_strings, .. } = self.program;
-        let code = chunk.code();
+        let Chunk { code, mut interned_strings, .. } = self.program;
+        let instructions = code.instructions();
         let mut ip: usize = 0;
-        while ip < code.len() {
-            let (op, line) = code.get(ip).unwrap();
+        while ip < instructions.len() {
+            let (op, line) = instructions.get(ip).unwrap();
             macro_rules! binary {
                 ($l:tt) => {{
                     let v1 = try_number(&self.stack.pop().unwrap(), stringify!($l), &line)?;
@@ -226,11 +226,11 @@ mod tests {
     fn final_res(lines: Vec<&str>) -> TracedValue {
         // Remove the final POP to ensure the stack isn't empty
         let mut compiled = unsafe_compile(lines);
-        assert!(match compiled.chunk.get(compiled.chunk.len() - 2).unwrap().0 {
+        assert!(match compiled.code.get(compiled.code.len() - 2).unwrap().0 {
             OpCode::Pop => true,
             _ => false
         });
-        compiled.chunk.remove(compiled.chunk.len() - 2);
+        compiled.code.remove(compiled.code.len() - 2);
         let stack = VirtualMachine::new(compiled).run(&mut sink()).unwrap();
         // Last is return, which as an empty, because second from last is pop, which will also end
         // with an empty stack.

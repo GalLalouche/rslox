@@ -2,10 +2,10 @@ use std::fmt::Debug;
 
 use crate::rslox::common::tests::unsafe_tokenize;
 use crate::rslox::compiled::compiler::compile;
-use crate::rslox::compiled::program::Program;
+use crate::rslox::compiled::chunk::Chunk;
 
 #[cfg(test)]
-pub fn unsafe_compile(program: Vec<&str>) -> Program {
+pub fn unsafe_compile(program: Vec<&str>) -> Chunk {
     compile(unsafe_tokenize(program)).expect("Failed to compile")
 }
 
