@@ -68,11 +68,11 @@ impl VirtualMachine {
     }
 
     #[cfg(test)]
-    fn disassemble(&self) -> String {
+    fn disassemble(self) -> String {
         let mut result = Vec::new();
         let mut previous_line: Line = 0;
         let mut is_first = true;
-        for (i, (op, line)) in self.program.code.iter().enumerate() {
+        for (i, (op, line)) in self.program.get_code().iter().enumerate() {
             let prefix = format!(
                 "{:0>2}: {:>2}",
                 i,
@@ -109,7 +109,7 @@ impl VirtualMachine {
 
     // Returns the final stack value
     pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
-        let Chunk { code, mut interned_strings, .. } = self.program;
+        let (code, mut interned_strings) = self.program.to_tuple();
         let instructions = code.instructions();
         let mut ip: usize = 0;
         while ip < instructions.len() {
@@ -225,11 +225,12 @@ mod tests {
     fn final_res(lines: Vec<&str>) -> TracedValue {
         // Remove the final POP to ensure the stack isn't empty
         let mut compiled = unsafe_compile(lines);
-        assert!(match compiled.code.get(compiled.code.len() - 2).unwrap().0 {
+        let mut code = compiled.get_code();
+        assert!(match code.get(code.len() - 2).unwrap().0 {
             OpCode::Pop => true,
             _ => false
         });
-        compiled.code.remove(compiled.code.len() - 2);
+        compiled.remove(code.len() - 2);
         let stack = VirtualMachine::new(compiled).run(&mut sink()).unwrap();
         // Last is return, which as an empty, because second from last is pop, which will also end
         // with an empty stack.

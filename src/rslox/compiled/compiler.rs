@@ -423,8 +423,8 @@ impl Compiler {
         Ok(last_line)
     }
 
-    fn active_chunk(&mut self) -> &mut Code {
-        &mut self.chunk.code
+    fn active_chunk(&mut self) -> &mut Chunk {
+        &mut self.chunk
     }
 
     fn resolve_local(&self, name: &InternedString, line: &Line) -> Result<Option<usize>, CompilerError> {
@@ -517,8 +517,8 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["123;"]).code,
-            expected,
+            unsafe_compile(vec!["123;"]).get_code(),
+            &expected,
         )
     }
 
@@ -529,8 +529,8 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            compile(unsafe_tokenize(vec!["(123);"])).unwrap().code,
-            expected,
+            compile(unsafe_tokenize(vec!["(123);"])).unwrap().get_code(),
+            &expected,
         )
     }
 
@@ -542,8 +542,8 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["-123;"]).code,
-            expected,
+            unsafe_compile(vec!["-123;"]).get_code(),
+            &expected,
         )
     }
 
@@ -557,8 +557,8 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["-1+2;"]).code,
-            expected,
+            unsafe_compile(vec!["-1+2;"]).get_code(),
+            &expected,
         )
     }
 
@@ -572,19 +572,18 @@ mod tests {
         expected.write(OpCode::Pop, 1);
         expected.write(OpCode::Return, 1);
         assert_eq!(
-            unsafe_compile(vec!["-1-2;"]).code,
-            expected,
+            unsafe_compile(vec!["-1-2;"]).get_code(),
+            &expected,
         )
     }
 
     #[test]
     fn string_interning() {
-        let interned_strings = unsafe_compile(vec![r#""str" == "str";"#]).interned_strings;
         let mut expected = HashSet::new();
         expected.insert(Rc::new("str".to_owned()));
         assert_eq!(
-            interned_strings,
-            expected,
+            unsafe_compile(vec![r#""str" == "str";"#]).get_interned_strings(),
+            &expected,
         )
     }
 
@@ -609,9 +608,9 @@ mod tests {
         let compiled = unsafe_compile(vec!["var foo;"]);
         let mut expected: Chunk = Default::default();
         let w = expected.intern_string("foo".to_owned());
-        expected.code.write(OpCode::Nil, 1);
-        expected.code.write(OpCode::DefineGlobal(w), 1);
-        expected.code.write(OpCode::Return, 1);
+        expected.write(OpCode::Nil, 1);
+        expected.write(OpCode::DefineGlobal(w), 1);
+        expected.write(OpCode::Return, 1);
         assert_deep_eq!(
             compiled,
             expected,
