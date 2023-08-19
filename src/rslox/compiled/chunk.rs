@@ -34,11 +34,11 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    pub fn define_global(&mut self, str: String) -> GcWeak<String> {
+    pub fn intern_string(&mut self, str: String) -> GcWeak<String> {
         GcWeak::from(self.interned_strings.get_or_insert(Rc::new(str)))
     }
-    pub fn intern_string(&mut self, str: String, line: Line) {
-        let interned = self.define_global(str);
+    pub fn string_literal(&mut self, str: String, line: Line) {
+        let interned = self.intern_string(str);
         self.code.write(OpCode::String(interned), line);
     }
 }
