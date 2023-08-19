@@ -1,4 +1,4 @@
-use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::chunk::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
 
 pub type CodeLocation = usize;
@@ -9,7 +9,7 @@ pub enum OpCode {
     Return,
     Pop,
     Print,
-    DefineGlobal(GcWeak<String>),
+    DefineGlobal(InternedString),
     DefineLocal(StackLocation),
     Number(f64),
     Bool(bool),
@@ -17,9 +17,9 @@ pub enum OpCode {
     // Hurray for real languages!
     // While "Weak", this is never expected to actually point to null as Strings are only
     // "uninterested" when garbage collected.
-    String(GcWeak<String>),
-    GetGlobal(GcWeak<String>),
-    SetGlobal(GcWeak<String>),
+    String(InternedString),
+    GetGlobal(InternedString),
+    SetGlobal(InternedString),
     GetLocal(StackLocation),
     SetLocal(StackLocation),
     Nil,

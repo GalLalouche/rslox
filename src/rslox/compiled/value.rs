@@ -1,14 +1,15 @@
 use std::borrow::BorrowMut;
 use std::convert::TryFrom;
+use std::ops::Deref;
 
-use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::chunk::InternedString;
 
 #[derive(Debug, Clone)]
 pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
-    String(GcWeak<String>),
+    String(InternedString),
 }
 
 impl PartialEq<Self> for Value {
@@ -101,7 +102,7 @@ impl<'a> TryFrom<&'a Value> for &'a bool {
     }
 }
 
-impl<'a> TryFrom<&'a Value> for GcWeak<String> {
+impl<'a> TryFrom<&'a Value> for InternedString {
     type Error = String;
 
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
@@ -110,4 +111,8 @@ impl<'a> TryFrom<&'a Value> for GcWeak<String> {
             e => Err(format!("Expected Value::String, but found {:?}", e)),
         }
     }
+}
+
+impl InternedString {
+    pub fn to_owned(&self) -> String { self.unwrap_upgrade().deref().clone() }
 }

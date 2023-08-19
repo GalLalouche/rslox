@@ -8,9 +8,8 @@ use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::Chunk;
+use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::{Code, Line};
-use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
 
 type CompilerError = ParserError;
@@ -28,7 +27,7 @@ struct Compiler {
     chunk: Chunk,
     tokens: Vec<Token>,
     current: usize,
-    locals: Vec<(GcWeak<String>, Depth)>,
+    locals: Vec<(InternedString, Depth)>,
     depth: Depth,
 }
 
@@ -292,7 +291,7 @@ impl Compiler {
             Ok(line)
         }?;
         if self.depth == 0 {
-            self.active_chunk().write(OpCode::DefineGlobal(interned_name.clone()), line);
+            self.active_chunk().write(OpCode::DefineGlobal(interned_name), line);
             Ok(())
         } else {
             // Skipping the first element because that is the current (uninitialized) local.
@@ -306,8 +305,7 @@ impl Compiler {
                             "Redefined variable '{}' in same scope",
                             interned_name.unwrap_upgrade()),
                         token: Token {
-                            r#type: TokenType::identifier(
-                                interned_name.unwrap_upgrade().deref().clone()),
+                            r#type: TokenType::identifier(interned_name.to_owned()),
                             line,
                         },
                     });
@@ -350,7 +348,7 @@ impl Compiler {
             TokenType::Identifier(name) => {
                 let is_assignment = can_assign && self.matches(TokenType::Equal).is_some();
                 let interned_name = self.chunk.intern_string(name);
-                match self.resolve_local(interned_name.clone(), &line)? {
+                match self.resolve_local(&interned_name, &line)? {
                     Some(index) => {
                         if is_assignment {
                             self.compile_expression()?;
@@ -362,9 +360,9 @@ impl Compiler {
                     None => {
                         if is_assignment {
                             self.compile_expression()?;
-                            self.active_chunk().write(OpCode::SetGlobal(interned_name.clone()), line);
+                            self.active_chunk().write(OpCode::SetGlobal(interned_name), line);
                         } else {
-                            self.active_chunk().write(OpCode::GetGlobal(interned_name.clone()), line);
+                            self.active_chunk().write(OpCode::GetGlobal(interned_name), line);
                         }
                     }
                 }
@@ -426,16 +424,16 @@ impl Compiler {
         &mut self.chunk.code
     }
 
-    fn resolve_local(&self, name: GcWeak<String>, line: &Line) -> Result<Option<usize>, CompilerError> {
+    fn resolve_local(&self, name: &InternedString, line: &Line) -> Result<Option<usize>, CompilerError> {
         for (i, (local_name, depth)) in self.locals.iter().rev().enumerate() {
             if depth == &UNINITIALIZED {
                 return Err(CompilerError::new(
                     format!(
                         "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
-                    Token::new(*line, TokenType::identifier(name.unwrap_upgrade().deref().clone())),
+                    Token::new(*line, TokenType::identifier(name.to_owned())),
                 ));
             }
-            if &name == local_name {
+            if name == local_name {
                 return Ok(Some(i));
             }
         }

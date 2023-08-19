@@ -5,9 +5,8 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::stringify;
 
-use crate::rslox::compiled::chunk::Chunk;
+use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
-use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
 use crate::rslox::compiled::value::Value;
 
@@ -185,9 +184,9 @@ impl VirtualMachine {
                 OpCode::Add =>
                     if self.stack.last().unwrap().is_string() {
                         let popped = &self.stack.pop().unwrap();
-                        let s1: GcWeak<String> = TryInto::<GcWeak<String>>::try_into(popped).unwrap();
-                        let s2: GcWeak<String> =
-                            TryInto::<GcWeak<String>>::try_into(self.stack.last().unwrap())
+                        let s1: InternedString = TryInto::<InternedString>::try_into(popped).unwrap();
+                        let s2: InternedString =
+                            TryInto::<InternedString>::try_into(self.stack.last().unwrap())
                                 .map_err(|err| VmError(
                                     format!("{} ({})", err, "String concat"),
                                     *line,

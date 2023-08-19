@@ -33,8 +33,10 @@ pub struct Chunk {
     pub interned_strings: HashSet<Rc<String>>,
 }
 
+pub type InternedString = GcWeak<String>;
+
 impl Chunk {
-    pub fn intern_string(&mut self, str: String) -> GcWeak<String> {
+    pub fn intern_string(&mut self, str: String) -> InternedString {
         GcWeak::from(self.interned_strings.get_or_insert(Rc::new(str)))
     }
     pub fn string_literal(&mut self, str: String, line: Line) {
