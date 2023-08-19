@@ -1,5 +1,6 @@
 use crate::rslox::compiled::chunk::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
+use crate::rslox::compiled::value::Function;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
@@ -13,6 +14,7 @@ pub enum OpCode {
     DefineLocal(StackLocation),
     Number(f64),
     Bool(bool),
+    Function(Function),
     // since std::String is already heap managed, we don't need a separate pointer here.
     // Hurray for real languages!
     // While "Weak", this is never expected to actually point to null as Strings are only
@@ -62,6 +64,7 @@ impl OpCode {
             OpCode::Number(_) => "DEFINE_LOCAL",
             OpCode::Bool(_) => "BOOL",
             OpCode::String(_) => "STRING",
+            OpCode::Function(_) => "FUNCTION",
             OpCode::GetGlobal(_) => "GET_GLOBAL",
             OpCode::SetGlobal(_) => "SET_GLOBAL",
             OpCode::GetLocal(_) => "GET_LOCAL",

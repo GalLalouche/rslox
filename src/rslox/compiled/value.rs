@@ -2,7 +2,7 @@ use std::borrow::BorrowMut;
 use std::convert::TryFrom;
 use std::ops::Deref;
 
-use crate::rslox::compiled::chunk::InternedString;
+use crate::rslox::compiled::chunk::{Chunk, InternedString};
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -10,6 +10,18 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
+    Function(Function),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Function {
+    pub name: InternedString,
+    pub arity: usize,
+    pub chunk: Chunk,
+}
+
+impl Function {
+    pub fn stringify(&self) -> String { format!("<fn {}>", self.name.to_owned()) }
 }
 
 impl PartialEq<Self> for Value {
@@ -44,6 +56,7 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
+            Value::Function(f) => f.stringify(),
         }
     }
     pub fn is_truthy(&self) -> bool {

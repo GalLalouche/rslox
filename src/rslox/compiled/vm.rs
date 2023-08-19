@@ -37,6 +37,7 @@ pub enum TracedValue {
     Bool(bool),
     Nil,
     String(String),
+    Function { name: String, arity: usize, chunk: Chunk },
 }
 
 impl From<&Value> for TracedValue {
@@ -46,6 +47,11 @@ impl From<&Value> for TracedValue {
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
             Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
+            Value::Function(f) => TracedValue::Function {
+                name: f.name.to_owned(),
+                arity: f.arity,
+                chunk: f.chunk.clone(),
+            }
         }
     }
 }
@@ -84,7 +90,8 @@ impl VirtualMachine {
             );
 
             let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
-                OpCode::Number(num) => format!(" {}", num),
+                OpCode::Number(num) => format!("{}", num),
+                OpCode::Function(f) => format!("{}", f.stringify()),
                 OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
@@ -129,6 +136,7 @@ impl VirtualMachine {
                     write!(writer, "{}", expr.stringify()).expect("Not written");
                 }
                 OpCode::Number(num) => self.stack.push(Value::Number(*num)),
+                OpCode::Function(f) => self.stack.push(Value::Function(f.clone())),
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
@@ -580,6 +588,19 @@ mod tests {
                 "}",
             ]),
             "012",
+        )
+    }
+
+    #[test]
+    fn printing_a_function_value() {
+        assert_eq!(
+            printed_string(vec![
+                "fun areWeHavingItYet() {",
+                "  print \"Yes we are!\";",
+                "}",
+                "print areWeHavingItYet;",
+            ]),
+            "<fn areWeHavingItYet>",
         )
     }
 }

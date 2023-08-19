@@ -1,5 +1,7 @@
+use std::cell::{Ref, RefCell};
 use std::mem;
 use std::ops::Deref;
+use std::rc::Rc;
 
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
@@ -11,6 +13,7 @@ use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::{Code, Line};
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
+use crate::rslox::compiled::value::Function;
 
 type CompilerError = ParserError;
 
@@ -24,55 +27,10 @@ const UNINITIALIZED: Depth = -1;
 
 #[derive(Debug, Default)]
 struct Compiler {
-    chunk: Chunk,
+    script: FunctionFrame,
     tokens: Vec<Token>,
-    current: usize,
-    locals: Vec<(InternedString, Depth)>,
-    depth: Depth,
 }
 
-#[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd, FromPrimitive)]
-enum Precedence {
-    TopLevel,
-    Assignment,
-    Or,
-    And,
-    Equality /* == != */,
-    Comparison /* < > <= >= */,
-    Term /* + - */,
-    Factor /* * / */,
-    Unary /* ! - */,
-    Call /* . () */,
-    Primary,
-}
-
-impl Precedence {
-    fn next(&self) -> Option<Self> {
-        FromPrimitive::from_u8(*self as u8 + 1)
-    }
-}
-
-impl From<&TokenType> for Precedence {
-    fn from(tt: &TokenType) -> Self {
-        match tt {
-            TokenType::Minus => Precedence::Term,
-            TokenType::Plus => Precedence::Term,
-            TokenType::Slash => Precedence::Factor,
-            TokenType::Star => Precedence::Factor,
-            TokenType::EqualEqual => Precedence::Equality,
-            TokenType::BangEqual => Precedence::Equality,
-            TokenType::Less => Precedence::Comparison,
-            TokenType::LessEqual => Precedence::Comparison,
-            TokenType::Greater => Precedence::Comparison,
-            TokenType::GreaterEqual => Precedence::Comparison,
-            _ => Precedence::TopLevel,
-        }
-    }
-}
-
-type CanAssign = bool;
-type JumpOffset = usize;
 
 impl Compiler {
     pub fn new(lexems: Vec<Token>) -> Self {
@@ -80,6 +38,36 @@ impl Compiler {
     }
 
     pub fn compile(mut self) -> Result<Chunk, NonEmpty<CompilerError>> {
+        let mut last_chunk = Chunk::default();
+        let mut current = 0;
+        let tokens_rc = Rc::new(RefCell::new(self.tokens));
+        while current != tokens_rc.borrow().len() {
+            let frame = FunctionFrame::new(tokens_rc.clone(), current);
+            let (chunk, new_current) = frame.compile()?;
+            current = new_current;
+            last_chunk = chunk;
+        }
+        Ok(last_chunk)
+    }
+}
+
+type TokenPointer = usize;
+
+#[derive(Debug, Default)]
+struct FunctionFrame {
+    locals: Vec<(InternedString, Depth)>,
+    depth: Depth,
+    chunk: Chunk,
+
+    tokens: Rc<RefCell<Vec<Token>>>,
+    current: TokenPointer,
+}
+
+impl FunctionFrame {
+    pub fn new(tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer) -> Self {
+        FunctionFrame { tokens, current, ..Default::default() }
+    }
+    pub fn compile(mut self) -> Result<(Chunk, TokenPointer), NonEmpty<CompilerError>> {
         let mut last_line: Line = 0;
         let mut errors = Vec::new();
         while !self.is_at_end() {
@@ -90,21 +78,35 @@ impl Compiler {
         match NonEmpty::from_vec(errors) {
             None => {
                 self.active_chunk().write(OpCode::Return, last_line);
-                Ok(self.chunk)
+                Ok((self.chunk, self.current))
             }
             Some(errs) => Err(errs),
         }
     }
 
+    fn finish(mut self) -> (Chunk, TokenPointer) { (self.chunk, self.current) }
+
+    fn begin_scope(&mut self) {
+        self.depth += 1;
+    }
+
+    fn end_scope(&mut self, line: Line) {
+        assert!(self.depth > 0);
+        while self.locals.last().map(|e| e.1).contains(&self.depth) {
+            self.chunk.write(OpCode::Pop, line);
+            self.locals.pop().unwrap();
+        }
+        self.depth -= 1;
+    }
+
     fn synchronize(&mut self) {
         while !self.is_at_end() && !self.matches(TokenType::Semicolon).is_some() {
-            match self.peek_type() {
+            let should_continue = match self.peek_type().deref() {
                 TokenType::Class | TokenType::Fun | TokenType::Var | TokenType::For | TokenType::If
-                | TokenType::While | TokenType::Print | TokenType::Return => return,
-                _ => {
-                    self.advance();
-                }
-            }
+                | TokenType::While | TokenType::Print | TokenType::Return => false,
+                _ => true,
+            };
+            if should_continue { self.advance(); } else { return; }
         }
     }
 
@@ -116,7 +118,18 @@ impl Compiler {
                 None
             }};
         }
-        if let Some(line) = self.matches(TokenType::Var) {
+        if let Some(line) = self.matches(TokenType::Fun) {
+            match self.declare_function() {
+                Ok(_) => Some(line),
+                Err(errs) => {
+                    for err in errs {
+                        errors.push(err);
+                    }
+                    self.synchronize();
+                    None
+                }
+            }
+        } else if let Some(line) = self.matches(TokenType::Var) {
             match self.declare_variable(true as CanAssign) {
                 Ok(_) => Some(line),
                 Err(e) => push_single!(e),
@@ -147,20 +160,7 @@ impl Compiler {
         } else if let Some(line) = self.matches(TokenType::For) {
             return self.for_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::OpenBrace) {
-            self.begin_scope();
-            let mut errors = Vec::new();
-            while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
-                self.declaration(&mut errors);
-            }
-            self.consume(TokenType::CloseBrace, None).to_nonempty()?;
-            // Skip the semicolon
-            return match NonEmpty::from_vec(errors) {
-                None => {
-                    self.end_scope(line);
-                    Ok(line)
-                }
-                Some(errs) => Err(errs),
-            };
+            return self.block(line);
         } else {
             self.expression_statement().to_nonempty()?
         };
@@ -168,17 +168,21 @@ impl Compiler {
         Ok(line)
     }
 
-    fn end_scope(&mut self, line: Line) {
-        assert!(self.depth > 0);
-        while self.locals.last().map(|e| e.1).contains(&self.depth) {
-            self.active_chunk().write(OpCode::Pop, line);
-            self.locals.pop().unwrap();
+    fn block(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
+        self.begin_scope();
+        let mut errors = Vec::new();
+        while !self.is_at_end() && self.peek_type().deref() != &TokenType::CloseBrace {
+            self.declaration(&mut errors);
         }
-        self.depth -= 1;
-    }
-
-    fn begin_scope(&mut self) {
-        self.depth += 1;
+        self.consume(TokenType::CloseBrace, None).to_nonempty()?;
+        // Skip the semicolon
+        return match NonEmpty::from_vec(errors) {
+            None => {
+                self.end_scope(line);
+                Ok(line)
+            }
+            Some(errs) => Err(errs),
+        };
     }
 
     fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
@@ -272,7 +276,38 @@ impl Compiler {
         Ok(())
     }
 
+    fn declare_function(&mut self) -> Result<(), NonEmpty<CompilerError>> {
+        let (name, line) = self.parse_variable().to_nonempty()?;
+        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenBrace, None).to_nonempty()?;
+        let mut frame = FunctionFrame::new(self.tokens.clone(), self.current);
+        frame.block(line)?;
+        let (chunk, new_current) = frame.finish();
+        let function = Function { name: name.clone(), chunk, arity: 0 };
+        self.current = new_current;
+        self.chunk.write(OpCode::Function(function), line);
+        self.define_variable(name.clone(), line).to_nonempty()
+    }
+
     fn declare_variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
+        let (name, line) = self.parse_variable()?;
+        if self.depth > 0 {
+            self.locals.push((name.clone(), UNINITIALIZED));
+        }
+        if can_assign && self.matches(TokenType::Equal).is_some() {
+            self.compile_expression()
+        } else {
+            self.active_chunk().write(OpCode::Nil, line);
+            Ok(line)
+        }?;
+        self.define_variable(name, line).and_then(|result| {
+            self.consume(TokenType::Semicolon, None)?;
+            Ok(result)
+        })
+    }
+
+    fn parse_variable(&mut self) -> Result<(InternedString, Line), CompilerError> {
         let Token { r#type, line } = self.advance();
         let name = match r#type {
             TokenType::Identifier(name) => Ok(name),
@@ -281,18 +316,12 @@ impl Compiler {
                 token: Token { r#type: e, line },
             })
         }?;
-        let interned_name = self.chunk.intern_string(name);
-        if self.depth > 0 {
-            self.locals.push((interned_name.clone(), UNINITIALIZED));
-        }
-        if can_assign && self.matches(TokenType::Equal).is_some() {
-            self.compile_expression()
-        } else {
-            self.active_chunk().write(OpCode::Nil, line);
-            Ok(line)
-        }?;
+        Ok((self.chunk.intern_string(name), line))
+    }
+
+    fn define_variable(&mut self, name: InternedString, line: Line) -> Result<(), CompilerError> {
         if self.depth == 0 {
-            self.active_chunk().write(OpCode::DefineGlobal(interned_name), line);
+            self.active_chunk().write(OpCode::DefineGlobal(name), line);
             Ok(())
         } else {
             // Skipping the first element because that is the current (uninitialized) local.
@@ -300,25 +329,22 @@ impl Compiler {
                 if depth < &self.depth {
                     break;
                 }
-                if &interned_name == local_name {
+                if &name == local_name {
                     return Err(CompilerError {
                         message: format!(
                             "Redefined variable '{}' in same scope",
-                            interned_name.unwrap_upgrade()),
+                            name.unwrap_upgrade()),
                         token: Token {
-                            r#type: TokenType::identifier(interned_name.to_owned()),
+                            r#type: TokenType::identifier(name.to_owned()),
                             line,
                         },
                     });
                 }
             }
-            assert_eq!(self.locals.last().unwrap().0, interned_name);
+            assert_eq!(self.locals.last().unwrap().0, name);
             self.locals.last_mut().unwrap().1 = self.depth;
             Ok(())
-        }.and_then(|result| {
-            self.consume(TokenType::Semicolon, None)?;
-            Ok(result)
-        })
+        }
     }
 
     fn expression_statement(&mut self) -> Result<Line, CompilerError> {
@@ -371,7 +397,7 @@ impl Compiler {
             TokenType::StringLiteral(str) => {
                 let interned = self.chunk.intern_string(str);
                 self.active_chunk().write(OpCode::String(interned), line);
-            },
+            }
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
                     TokenType::True => OpCode::Bool(true),
@@ -389,7 +415,7 @@ impl Compiler {
                 CompilerError::new(format!("Unexpected '{:?}'", e), Token { r#type: e, line })),
         }
         let mut last_line = line;
-        while !self.is_at_end() && precedence <= Precedence::from(self.peek_type()) {
+        while !self.is_at_end() && precedence <= Precedence::from(self.peek_type().deref()) {
             let Token { line, r#type } = self.advance();
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
@@ -414,10 +440,10 @@ impl Compiler {
                 }
             }
             last_line = line;
-            if !self.is_at_end() && can_assign && self.peek_type() == &TokenType::Equal {
+            if !self.is_at_end() && can_assign && self.peek_type().deref() == &TokenType::Equal {
                 return Err(CompilerError::new(
                     "Invalid assignment target.",
-                    self.tokens[self.current].clone(),
+                    self.tokens.borrow()[self.current].clone(),
                 ));
             }
         }
@@ -449,7 +475,7 @@ impl Compiler {
         if self.is_at_end() {
             return Err(CompilerError::new(
                 format!("Expected {}, but encountered end of file", expected_msg),
-                self.tokens.last().expect("empty tokens").to_owned(),
+                self.tokens.borrow().last().expect("empty tokens").to_owned(),
             ));
         }
 
@@ -473,8 +499,8 @@ impl Compiler {
     fn matches(&mut self, tt: TokenType) -> Option<Line> {
         if self.is_at_end() {
             None
-        } else if self.peek_type() == &tt {
-            let result = self.tokens[self.current].line;
+        } else if self.peek_type().deref() == &tt {
+            let result = self.tokens.borrow()[self.current].line;
             self.advance();
             Some(result)
         } else {
@@ -483,20 +509,65 @@ impl Compiler {
     }
 
     fn advance(&mut self) -> Token {
-        let result =
-            mem::replace(self.tokens.get_mut(self.current).unwrap(), Token::new(0, TokenType::Eof));
+        let result = mem::replace(
+            self.tokens.borrow_mut().get_mut(self.current).unwrap(),
+            Token::new(0, TokenType::Eof),
+        );
         self.current += 1;
         result
     }
 
     fn is_at_end(&self) -> bool {
-        self.current == self.tokens.len()
+        self.current == self.tokens.borrow().len()
     }
 
-    fn peek_type(&self) -> &TokenType {
-        &self.tokens[self.current].r#type
+    fn peek_type(&self) -> Ref<TokenType> {
+        Ref::map(self.tokens.borrow(), |tokens| &tokens[self.current].r#type)
     }
 }
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Ord, PartialOrd, FromPrimitive)]
+enum Precedence {
+    TopLevel,
+    Assignment,
+    Or,
+    And,
+    Equality /* == != */,
+    Comparison /* < > <= >= */,
+    Term /* + - */,
+    Factor /* * / */,
+    Unary /* ! - */,
+    Call /* . () */,
+    Primary,
+}
+
+impl Precedence {
+    fn next(&self) -> Option<Self> {
+        FromPrimitive::from_u8(*self as u8 + 1)
+    }
+}
+
+impl From<&TokenType> for Precedence {
+    fn from(tt: &TokenType) -> Self {
+        match tt {
+            TokenType::Minus => Precedence::Term,
+            TokenType::Plus => Precedence::Term,
+            TokenType::Slash => Precedence::Factor,
+            TokenType::Star => Precedence::Factor,
+            TokenType::EqualEqual => Precedence::Equality,
+            TokenType::BangEqual => Precedence::Equality,
+            TokenType::Less => Precedence::Comparison,
+            TokenType::LessEqual => Precedence::Comparison,
+            TokenType::Greater => Precedence::Comparison,
+            TokenType::GreaterEqual => Precedence::Comparison,
+            _ => Precedence::TopLevel,
+        }
+    }
+}
+
+type CanAssign = bool;
+type JumpOffset = usize;
 
 #[cfg(test)]
 mod tests {
