@@ -31,26 +31,20 @@ pub type Line = usize;
 pub struct Chunk {
     pub code: Code,
     pub interned_strings: HashSet<Rc<String>>,
-    globals: HashSet<GcRc<String>>,
 }
 
 impl Chunk {
     pub fn define_global(&mut self, str: String) -> GcWeak<String> {
-        (&self.globals.get_or_insert(GcRc(Rc::new(str))).0).into()
-    }
-    pub fn get_global(&self, str: &str) -> Option<Rc<String>> {
-        self.globals.get(str).map(|e| e.0.clone())
+        GcWeak::from(self.interned_strings.get_or_insert(Rc::new(str)))
     }
     pub fn intern_string(&mut self, str: String, line: Line) {
-        let entry = self.interned_strings.get_or_insert(Rc::new(str));
-        self.code.write(OpCode::String(entry.into()), line);
+        let interned = self.define_global(str);
+        self.code.write(OpCode::String(interned), line);
     }
 }
 
 impl DeepEq for Chunk {
     fn deep_eq(&self, other: &Self) -> bool {
-        self.code.deep_eq(&other.code) &&
-            self.interned_strings == other.interned_strings &&
-            self.globals == other.globals
+        self.code.deep_eq(&other.code) && self.interned_strings == other.interned_strings
     }
 }

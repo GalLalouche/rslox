@@ -5,10 +5,10 @@ use std::ops::Deref;
 use std::rc::Rc;
 use std::stringify;
 
+use crate::rslox::compiled::chunk::Chunk;
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
-use crate::rslox::compiled::chunk::Chunk;
 use crate::rslox::compiled::value::Value;
 
 #[derive(Debug, Clone, PartialEq, Eq)]

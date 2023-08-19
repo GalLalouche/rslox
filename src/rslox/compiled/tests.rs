@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use crate::rslox::common::tests::unsafe_tokenize;
-use crate::rslox::compiled::compiler::compile;
 use crate::rslox::compiled::chunk::Chunk;
+use crate::rslox::compiled::compiler::compile;
 
 #[cfg(test)]
 pub fn unsafe_compile(program: Vec<&str>) -> Chunk {

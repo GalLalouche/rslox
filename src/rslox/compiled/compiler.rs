@@ -7,9 +7,9 @@ use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
+use crate::rslox::compiled::chunk::Chunk;
 use crate::rslox::compiled::code::{Code, Line};
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
-use crate::rslox::compiled::chunk::Chunk;
 
 type CompilerError = ParserError;
 pub fn compile(lexems: Vec<Token>) -> LoxResult<Chunk> {
@@ -22,7 +22,7 @@ const UNINITIALIZED: Depth = -1;
 
 #[derive(Debug, Default)]
 struct Compiler {
-    program: Chunk,
+    chunk: Chunk,
     tokens: Vec<Token>,
     current: usize,
     locals: Vec<(String, Depth)>,
@@ -88,7 +88,7 @@ impl Compiler {
         match NonEmpty::from_vec(errors) {
             None => {
                 self.active_chunk().write(OpCode::Return, last_line);
-                Ok(self.program)
+                Ok(self.chunk)
             }
             Some(errs) => Err(errs),
         }
@@ -288,7 +288,7 @@ impl Compiler {
             Ok(line)
         }?;
         if self.depth == 0 {
-            let global = self.program.define_global(name);
+            let global = self.chunk.define_global(name);
             self.active_chunk().write(OpCode::DefineGlobal(global), line);
             Ok(())
         } else {
@@ -350,7 +350,7 @@ impl Compiler {
                         }
                     }
                     None => {
-                        let global = self.program.define_global(name);
+                        let global = self.chunk.define_global(name);
                         if is_assignment {
                             self.compile_expression()?;
                             self.active_chunk().write(OpCode::SetGlobal(global), line);
@@ -360,7 +360,7 @@ impl Compiler {
                     }
                 }
             }
-            TokenType::StringLiteral(str) => self.program.intern_string(str, line),
+            TokenType::StringLiteral(str) => self.chunk.intern_string(str, line),
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
                     TokenType::True => OpCode::Bool(true),
@@ -414,7 +414,7 @@ impl Compiler {
     }
 
     fn active_chunk(&mut self) -> &mut Code {
-        &mut self.program.code
+        &mut self.chunk.code
     }
 
     fn resolve_local(&self, name: &str, line: &Line) -> Result<Option<usize>, CompilerError> {
