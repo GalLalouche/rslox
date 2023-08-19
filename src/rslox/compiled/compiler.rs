@@ -367,7 +367,10 @@ impl Compiler {
                     }
                 }
             }
-            TokenType::StringLiteral(str) => self.chunk.string_literal(str, line),
+            TokenType::StringLiteral(str) => {
+                let interned = self.chunk.intern_string(str);
+                self.active_chunk().write(OpCode::String(interned), line);
+            },
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
                     TokenType::True => OpCode::Bool(true),

@@ -6,7 +6,6 @@ use std::rc::Rc;
 
 use crate::rslox::compiled::code::Code;
 use crate::rslox::compiled::gc::GcWeak;
-use crate::rslox::compiled::op_code::OpCode;
 use crate::rslox::compiled::tests::DeepEq;
 
 // Overriding for Borrow
@@ -38,10 +37,6 @@ pub type InternedString = GcWeak<String>;
 impl Chunk {
     pub fn intern_string(&mut self, str: String) -> InternedString {
         GcWeak::from(self.interned_strings.get_or_insert(Rc::new(str)))
-    }
-    pub fn string_literal(&mut self, str: String, line: Line) {
-        let interned = self.intern_string(str);
-        self.code.write(OpCode::String(interned), line);
     }
 }
 
