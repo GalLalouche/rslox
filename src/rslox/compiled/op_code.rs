@@ -1,8 +1,8 @@
 use crate::rslox::compiled::chunk::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::Function;
 
 pub type CodeLocation = usize;
+pub type ConstantIndex = usize;
 pub type StackLocation = usize;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -10,11 +10,11 @@ pub enum OpCode {
     Return,
     Pop,
     Print,
+    Function(ConstantIndex),
     DefineGlobal(InternedString),
     DefineLocal(StackLocation),
     Number(f64),
     Bool(bool),
-    Function(Function),
     // since std::String is already heap managed, we don't need a separate pointer here.
     // Hurray for real languages!
     // While "Weak", this is never expected to actually point to null as Strings are only
@@ -46,6 +46,8 @@ impl DeepEq for OpCode {
         match (&self, &other) {
             (OpCode::DefineGlobal(s1), OpCode::DefineGlobal(s2)) =>
                 s1.unwrap_upgrade() == s2.unwrap_upgrade(),
+            (OpCode::GetGlobal(s1), OpCode::GetGlobal(s2)) =>
+                s1.unwrap_upgrade() == s2.unwrap_upgrade(),
             (OpCode::String(s1), OpCode::String(s2)) =>
                 s1.unwrap_upgrade() == s2.unwrap_upgrade(),
             _ => self == other
@@ -59,12 +61,12 @@ impl OpCode {
             OpCode::Return => "RETURN",
             OpCode::Pop => "POP",
             OpCode::Print => "PRINT",
+            OpCode::Function(_) => "FUNCTION",
             OpCode::DefineGlobal(_) => "DEFINE_GLOBAL",
             OpCode::DefineLocal(_) => "DEFINE_LOCAL",
             OpCode::Number(_) => "DEFINE_LOCAL",
             OpCode::Bool(_) => "BOOL",
             OpCode::String(_) => "STRING",
-            OpCode::Function(_) => "FUNCTION",
             OpCode::GetGlobal(_) => "GET_GLOBAL",
             OpCode::SetGlobal(_) => "SET_GLOBAL",
             OpCode::GetLocal(_) => "GET_LOCAL",

@@ -286,7 +286,7 @@ impl FunctionFrame {
         let (chunk, new_current) = frame.finish();
         let function = Function { name: name.clone(), chunk, arity: 0 };
         self.current = new_current;
-        self.chunk.write(OpCode::Function(function), line);
+        self.chunk.add_function(function, line);
         self.define_variable(name.clone(), line).to_nonempty()
     }
 
@@ -733,4 +733,30 @@ mod tests {
         )
     }
     // TODO No condition tests will just result in an infinite loop until return inside functions is implemented.
+
+    #[test]
+    fn define_and_print_function() {
+        let compiled = unsafe_compile(vec![
+            "fun areWeHavingItYet() {",
+            "  print \"Yes we are!\";",
+            "}",
+            "print areWeHavingItYet;",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        expected.write(OpCode::Function(0), 1);
+        expected.write(OpCode::DefineGlobal(w.clone()), 1);
+        expected.write(OpCode::GetGlobal(w.clone()), 4);
+        expected.write(OpCode::Print, 4);
+        expected.write(OpCode::Return, 4);
+        let mut function_chunk: Chunk = Default::default();
+        function_chunk.write(OpCode::Print, 2);
+        function_chunk.intern_string("Yes we are!".to_owned());
+        expected.add_function(Function {
+            name: w,
+            arity: 0,
+            chunk: function_chunk,
+        }, 1);
+        assert_deep_eq!(expected, compiled);
+    }
 }

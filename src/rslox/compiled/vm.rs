@@ -7,8 +7,9 @@ use std::stringify;
 
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
+use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
-use crate::rslox::compiled::value::Value;
+use crate::rslox::compiled::value::{Function, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct VmError(String, Line);
@@ -47,10 +48,13 @@ impl From<&Value> for TracedValue {
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
             Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
-            Value::Function(f) => TracedValue::Function {
-                name: f.name.to_owned(),
-                arity: f.arity,
-                chunk: f.chunk.clone(),
+            Value::Function(f_) => {
+                let f = f_.unwrap_upgrade();
+                TracedValue::Function {
+                    name: f.name.to_owned(),
+                    arity: f.arity,
+                    chunk: f.chunk.clone(),
+                }
             }
         }
     }
@@ -91,10 +95,10 @@ impl VirtualMachine {
 
             let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
                 OpCode::Number(num) => format!("{}", num),
-                OpCode::Function(f) => format!("{}", f.stringify()),
                 OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
+                OpCode::Function(i) => format!("{}", i),
                 OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
                 OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
                 OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
@@ -116,7 +120,7 @@ impl VirtualMachine {
 
     // Returns the final stack value
     pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
-        let (code, mut interned_strings) = self.program.to_tuple();
+        let (code, mut interned_strings, functions) = self.program.to_tuple();
         let instructions = code.instructions();
         let mut ip: usize = 0;
         while ip < instructions.len() {
@@ -136,7 +140,6 @@ impl VirtualMachine {
                     write!(writer, "{}", expr.stringify()).expect("Not written");
                 }
                 OpCode::Number(num) => self.stack.push(Value::Number(*num)),
-                OpCode::Function(f) => self.stack.push(Value::Function(f.clone())),
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
@@ -148,6 +151,15 @@ impl VirtualMachine {
                 }
                 OpCode::Jump(index) =>
                     ip = *index - 1, // ip will increase by one after we exit this pattern match.
+                OpCode::Function(index) => {
+                    let rc: &Rc<Function> = functions.get(*index).expect(
+                        format!(
+                            "Invalid index {}, constant size is {}",
+                            index,
+                            functions.len(),
+                        ).deref());
+                    self.stack.push(Value::Function(GcWeak::from(rc)))
+                }
                 OpCode::GetGlobal(name) => {
                     let rc = name.unwrap_upgrade();
                     let value = self.globals.get(rc.deref())

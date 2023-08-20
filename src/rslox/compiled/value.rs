@@ -3,6 +3,7 @@ use std::convert::TryFrom;
 use std::ops::Deref;
 
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
+use crate::rslox::compiled::gc::GcWeak;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -10,7 +11,7 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Function(Function),
+    Function(GcWeak<Function>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -56,7 +57,7 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
-            Value::Function(f) => f.stringify(),
+            Value::Function(f) => f.unwrap_upgrade().stringify(),
         }
     }
     pub fn is_truthy(&self) -> bool {
