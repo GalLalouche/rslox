@@ -51,10 +51,7 @@ impl LoxError for ResolverError {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum CurrentFunction {
-    Function,
-    Method,
-}
+enum CurrentFunction { Function }
 
 struct Resolver {
     scopes: LinkedList<HashMap<String, bool>>,

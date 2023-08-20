@@ -32,7 +32,7 @@ impl DeepEq for usize {
 }
 
 #[cfg(test)]
-pub fn eq_vec_msg<A>(left: Vec<A>, right: Vec<A>) -> Option<String> where A: PartialEq + Debug + Clone {
+pub fn _eq_vec_msg<A>(left: Vec<A>, right: Vec<A>) -> Option<String> where A: PartialEq + Debug + Clone {
     if left == right {
         return None;
     }

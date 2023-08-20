@@ -99,7 +99,7 @@ impl LoxValue {
 
     pub fn stringify(&self) -> String {
         match self {
-            Native { name, .. } => name.clone().into(),
+            Native { name, .. } => name.to_owned().into(),
             Callable { func: LoxFunction { arity, .. }, .. } => format!("Callable ({})", arity),
             Number(n) => n.to_string(),
             LoxValue::String(s) => s.replace("\\n", "\n").replace("\\t", "\t").replace("\\\\", "\\"),

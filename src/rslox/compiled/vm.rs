@@ -61,7 +61,7 @@ impl From<&Value> for TracedValue {
 }
 
 impl TracedValue {
-    pub fn string<S: Into<String>>(str: S) -> Self {
+    pub fn _string<S: Into<String>>(str: S) -> Self {
         TracedValue::String(str.into())
     }
 }
@@ -78,7 +78,7 @@ impl VirtualMachine {
     }
 
     #[cfg(test)]
-    fn disassemble(self) -> String {
+    fn _disassemble(self) -> String {
         let mut result = Vec::new();
         let mut previous_line: Line = 0;
         let mut is_first = true;
@@ -245,7 +245,7 @@ mod tests {
     fn final_res(lines: Vec<&str>) -> TracedValue {
         // Remove the final POP to ensure the stack isn't empty
         let mut compiled = unsafe_compile(lines);
-        let mut code = compiled.get_code();
+        let code = compiled.get_code();
         assert!(match code.get(code.len() - 2).unwrap().0 {
             OpCode::Pop => true,
             _ => false
@@ -261,10 +261,7 @@ mod tests {
         let mut buff = Cursor::new(Vec::new());
         let vm = VirtualMachine::new(unsafe_compile(lines));
         // // Comment this in for debugging the compiled program.
-        // use std::iter::Enumerate;
-        // use std::slice::Iter;
-        // use crate::rslox::common::utils::debug_mk_string;
-        // eprintln!("disassembled:\n{}", vm.disassemble());
+        // eprintln!("disassembled:\n{}", vm.clone()._disassemble());
         vm.run(&mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }

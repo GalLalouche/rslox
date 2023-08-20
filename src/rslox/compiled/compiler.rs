@@ -27,7 +27,6 @@ const UNINITIALIZED: Depth = -1;
 
 #[derive(Debug, Default)]
 struct Compiler {
-    script: FunctionFrame,
     tokens: Vec<Token>,
 }
 
@@ -37,7 +36,7 @@ impl Compiler {
         Compiler { tokens: lexems, ..Default::default() }
     }
 
-    pub fn compile(mut self) -> Result<Chunk, NonEmpty<CompilerError>> {
+    pub fn compile(self) -> Result<Chunk, NonEmpty<CompilerError>> {
         let mut last_chunk = Chunk::default();
         let mut current = 0;
         let tokens_rc = Rc::new(RefCell::new(self.tokens));
@@ -84,7 +83,7 @@ impl FunctionFrame {
         }
     }
 
-    fn finish(mut self) -> (Chunk, TokenPointer) { (self.chunk, self.current) }
+    fn finish(self) -> (Chunk, TokenPointer) { (self.chunk, self.current) }
 
     fn begin_scope(&mut self) {
         self.depth += 1;
