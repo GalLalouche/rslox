@@ -1,4 +1,6 @@
 use std::fmt::Debug;
+use std::ops::Deref;
+use std::rc::Rc;
 
 use crate::rslox::common::tests::unsafe_tokenize;
 use crate::rslox::compiled::chunk::Chunk;
@@ -15,7 +17,14 @@ pub trait DeepEq: PartialEq {
 
 impl <A: DeepEq> DeepEq for Vec<A> {
     fn deep_eq(&self, other: &Self) -> bool {
+        self.len() == other.len() &&
         self.into_iter().zip(other.into_iter()).all(|e| e.0.deep_eq(e.1))
+    }
+}
+
+impl <A: DeepEq> DeepEq for Rc<A> {
+    fn deep_eq(&self, other: &Self) -> bool {
+        self.deref().deep_eq(other.deref())
     }
 }
 
