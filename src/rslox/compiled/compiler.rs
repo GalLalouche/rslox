@@ -391,7 +391,7 @@ impl FunctionFrame {
                             self.active_chunk().write(OpCode::GetGlobal(interned_name), line);
                         }
                     }
-                }
+                };
             }
             TokenType::StringLiteral(str) => {
                 let interned = self.chunk.intern_string(str);
@@ -418,6 +418,7 @@ impl FunctionFrame {
             let Token { line, r#type } = self.advance();
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
+                TokenType::OpenParen => Left(OpCode::Call),
                 TokenType::Minus => Left(OpCode::Subtract),
                 TokenType::Plus => Left(OpCode::Add),
                 TokenType::Slash => Left(OpCode::Divide),
@@ -430,12 +431,20 @@ impl FunctionFrame {
                 TokenType::GreaterEqual => Right(OpCode::Less),
                 _ => panic!()
             };
-            self.compile_precedence(next_precedence)?;
-            match op {
-                Left(op) => { self.active_chunk().write(op, line); }
-                Right(op) => {
-                    self.active_chunk().write(op, line);
-                    self.active_chunk().write(OpCode::Not, line);
+            if op == Left(OpCode::Call) {
+                self.consume(
+                    TokenType::CloseParen,
+                    Some("Only procedures are supported right now".to_owned()),
+                )?;
+                self.active_chunk().write(OpCode::Call, line);
+            } else {
+                self.compile_precedence(next_precedence)?;
+                match op {
+                    Left(op) => { self.active_chunk().write(op, line); }
+                    Right(op) => {
+                        self.active_chunk().write(op, line);
+                        self.active_chunk().write(OpCode::Not, line);
+                    }
                 }
             }
             last_line = line;
@@ -550,6 +559,7 @@ impl Precedence {
 impl From<&TokenType> for Precedence {
     fn from(tt: &TokenType) -> Self {
         match tt {
+            TokenType::OpenParen => Precedence::Call,
             TokenType::Minus => Precedence::Term,
             TokenType::Plus => Precedence::Term,
             TokenType::Slash => Precedence::Factor,
@@ -731,8 +741,8 @@ mod tests {
             "Unexpected 'Var'"
         )
     }
-    // TODO No condition tests will just result in an infinite loop until return inside functions is implemented.
 
+    // TODO No condition tests will just result in an infinite loop until return inside functions is implemented.
     #[test]
     fn define_and_print_function() {
         let compiled = unsafe_compile(vec![
@@ -743,19 +753,38 @@ mod tests {
         ]);
         let mut expected: Chunk = Default::default();
         let w = expected.intern_string("areWeHavingItYet".to_owned());
-        expected.write(OpCode::Function(0), 1);
+        let mut function_chunk: Chunk = Default::default();
+        let w2 = function_chunk.intern_string("Yes we are!".to_owned());
+        function_chunk.write(OpCode::String(w2), 2);
+        function_chunk.write(OpCode::Print, 2);
+        expected.add_function(Function {
+            name: w.clone(),
+            arity: 0,
+            chunk: function_chunk,
+        }, 1);
         expected.write(OpCode::DefineGlobal(w.clone()), 1);
         expected.write(OpCode::GetGlobal(w.clone()), 4);
         expected.write(OpCode::Print, 4);
         expected.write(OpCode::Return, 4);
-        let mut function_chunk: Chunk = Default::default();
-        function_chunk.write(OpCode::Print, 2);
-        function_chunk.intern_string("Yes we are!".to_owned());
-        expected.add_function(Function {
-            name: w,
-            arity: 0,
-            chunk: function_chunk,
-        }, 1);
         assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn call_function() {
+        let compiled = unsafe_compile(vec![
+            "fun areWeHavingItYet() {",
+            "  print \"Yes we are!\";",
+            "}",
+            "areWeHavingItYet();",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        expected.write(OpCode::Function(0), 1);
+        expected.write(OpCode::DefineGlobal(w.clone()), 1);
+        expected.write(OpCode::GetGlobal(w.clone()), 4);
+        expected.write(OpCode::Call, 4);
+        expected.write(OpCode::Pop, 4);
+        expected.write(OpCode::Return, 4);
+        assert_deep_eq!(expected.get_code(), compiled.get_code());
     }
 }

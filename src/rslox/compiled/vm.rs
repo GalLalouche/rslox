@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::TryInto;
 use std::io::Write;
@@ -24,12 +25,159 @@ fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'
     value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone)]
 struct VirtualMachine {
-    program: Chunk,
-    stack: Vec<Value>,
-    globals: HashMap<String, Value>,
+    script: Function,
 }
+
+type InstructionPointer = usize;
+
+#[derive(Debug)]
+struct CallFrame {
+    function: GcWeak<Function>,
+    stack: Rc<RefCell<Vec<Value>>>,
+    globals: Rc<RefCell<HashMap<String, Value>>>,
+}
+
+impl CallFrame {
+    // Returns the final stack value
+    pub fn run(self, writer: &mut impl Write) -> Result<(), VmError> {
+        let chunk = &self.function.unwrap_upgrade().chunk;
+        // TODO find a better way than copying
+        let mut interned_strings = chunk.get_interned_strings().clone();
+        let code = chunk.get_code();
+        let instructions = code.instructions();
+        let mut ip: InstructionPointer = 0;
+        let stack = self.stack;
+        let globals = self.globals;
+        while ip < instructions.len() {
+            let (op, line) = instructions.get(ip).unwrap();
+            macro_rules! binary {
+                ($l:tt) => {{
+                    let v1 = try_number(&stack.borrow_mut().pop().unwrap(), stringify!($l), &line)?;
+                    *(try_number_mut(
+                        stack.borrow_mut().last_mut().unwrap(), stringify!($l), &line))? $l v1;
+                }}
+            }
+            match op {
+                OpCode::Return => (),
+                OpCode::Pop => { stack.borrow_mut().pop().unwrap(); }
+                OpCode::Print => {
+                    let expr = stack.borrow_mut().pop().unwrap();
+                    write!(writer, "{}", expr.stringify()).expect("Not written");
+                }
+                OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
+                OpCode::Function(i) =>
+                    stack.borrow_mut().push(Value::Function(chunk.get_function(*i))),
+                OpCode::UnpatchedJump =>
+                    panic!("Jump should have been patched at line: '{}'", line),
+                OpCode::JumpIfFalse(index) => {
+                    assert!(*index > ip, "Jump target '{}' was smaller than ip '{}'", index, ip);
+                    let should_skip = stack.borrow_mut().pop().unwrap().is_falsey();
+                    if should_skip {
+                        ip = *index - 1; // ip will increase by one after we exit this pattern match.
+                    }
+                }
+                OpCode::Jump(index) =>
+                    ip = *index - 1, // ip will increase by one after we exit this pattern match.
+                OpCode::GetGlobal(name) => {
+                    let rc = name.unwrap_upgrade();
+                    let value = globals.borrow().get(rc.deref()).cloned()
+                        .ok_or(VmError(format!("Unrecognized identifier '{}'", rc), *line))?;
+                    stack.borrow_mut().push(value.clone());
+                }
+                OpCode::DefineGlobal(name) => {
+                    let value = stack.borrow_mut().pop().unwrap();
+                    globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value);
+                }
+                OpCode::SetGlobal(name) => {
+                    // We not pop on assignment, to allow for chaining.
+                    let value = stack.borrow().last().cloned().unwrap();
+                    globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
+                }
+                OpCode::DefineLocal(index) =>
+                    (*stack.borrow_mut().get_mut(*index).unwrap()) =
+                        stack.borrow().last().unwrap().clone(),
+                OpCode::GetLocal(index) => {
+                    let value = stack.borrow().get(*index).unwrap().clone();
+                    stack.borrow_mut().push(value)
+                }
+                OpCode::SetLocal(index) => {
+                    // We not pop on assignment, to allow for chaining.
+                    let value = stack.borrow().last().cloned().unwrap();
+                    *stack.borrow_mut().get_mut(*index).unwrap() = value.clone();
+                }
+                OpCode::Bool(bool) => stack.borrow_mut().push(Value::Bool(*bool)),
+                OpCode::Nil => stack.borrow_mut().push(Value::Nil),
+                OpCode::String(s) => stack.borrow_mut().push(Value::String(s.clone())),
+                OpCode::Equals => {
+                    let v1 = stack.borrow_mut().pop().unwrap();
+                    let old_v2 = stack.borrow().last().cloned().unwrap();
+                    *stack.borrow_mut().last_mut().unwrap() = Value::Bool(v1 == old_v2);
+                }
+                OpCode::Greater => {
+                    let v1 = try_number(&stack.borrow_mut().pop().unwrap(), "Greater lhs", &line)?;
+                    let v2 =
+                        try_number(&stack.borrow().last().cloned().unwrap(), "Greater rhs", &line)?;
+                    *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 > v1);
+                }
+                OpCode::Less => {
+                    let v1 = try_number(&stack.borrow_mut().pop().unwrap(), "Less lhs", &line)?;
+                    let v2 =
+                        try_number(&stack.borrow().last().cloned().unwrap(), "Less rhs", &line)?;
+                    *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 < v1);
+                }
+                OpCode::Call => {
+                    let last = stack.borrow().last().cloned().unwrap();
+                    match last {
+                        Value::Function(f) => {
+                            let frame = CallFrame {
+                                function: f,
+                                stack: stack.clone(),
+                                globals: globals.clone(),
+                            };
+                            frame.run(writer)?;
+                        }
+                        v => {
+                            return Err(VmError(
+                                format!("Expected function, but got '{}'", v.stringify()),
+                                *line));
+                        }
+                    }
+                }
+                OpCode::Add =>
+                    if stack.borrow().last().unwrap().is_string() {
+                        let popped = &stack.borrow_mut().pop().unwrap();
+                        let s1: InternedString = TryInto::<InternedString>::try_into(popped).unwrap();
+                        let s2: InternedString =
+                            TryInto::<InternedString>::try_into(stack.borrow().last().unwrap())
+                                .map_err(|err| VmError(
+                                    format!("{} ({})", err, "String concat"),
+                                    *line,
+                                ))?;
+                        let result = interned_strings.get_or_insert(Rc::new(
+                            format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
+                        *(stack.borrow_mut().last_mut().unwrap()) = Value::String(result.into());
+                    } else {
+                        binary!(+=)
+                    },
+                OpCode::Subtract => binary!(-=),
+                OpCode::Multiply => binary!(*=),
+                OpCode::Divide => binary!(/=),
+                OpCode::Negate =>
+                    *try_number_mut(stack.borrow_mut().last_mut().unwrap(), "Negate", &line)? *=
+                        -1.0,
+                OpCode::Not => {
+                    let result = stack.borrow().last().unwrap().is_falsey();
+                    *stack.borrow_mut().last_mut().unwrap() = Value::Bool(result)
+                }
+            };
+            ip += 1;
+        }
+        Ok(())
+    }
+}
+
 
 // Copies all interned data locally.
 #[derive(Debug, Clone, PartialEq)]
@@ -74,7 +222,26 @@ struct TracedCommand {
 
 impl VirtualMachine {
     pub fn new(program: Chunk) -> Self {
-        VirtualMachine { program, ..Default::default() }
+        let script_name: Rc<String> = Rc::from("<script>".to_owned());
+        let script = Function {
+            name: GcWeak::from(&script_name),
+            arity: 0,
+            chunk: program,
+        };
+        VirtualMachine { script }
+    }
+
+    pub fn run(self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
+        let rc_script = Rc::from(self.script);
+        let stack: Rc<RefCell<Vec<Value>>> = Default::default();
+        let globals: Rc<RefCell<HashMap<String, Value>>> = Default::default();
+        let top_frame = CallFrame {
+            function: GcWeak::from(&rc_script),
+            globals: globals.clone(),
+            stack: stack.clone(),
+        };
+        top_frame.run(writer)?;
+        Ok(stack.take())
     }
 
     #[cfg(test)]
@@ -82,7 +249,7 @@ impl VirtualMachine {
         let mut result = Vec::new();
         let mut previous_line: Line = 0;
         let mut is_first = true;
-        for (i, (op, line)) in self.program.get_code().iter().enumerate() {
+        for (i, (op, line)) in self.script.chunk.get_code().iter().enumerate() {
             let prefix = format!(
                 "{:0>2}: {:>2}",
                 i,
@@ -109,126 +276,13 @@ impl VirtualMachine {
                 OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
                 OpCode::Return | OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals |
                 OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
-                OpCode::Divide | OpCode::Negate | OpCode::Not => "".to_owned(),
+                OpCode::Divide | OpCode::Negate | OpCode::Not | OpCode::Call => "".to_owned(),
             });
             result.push(command);
             previous_line = *line;
             is_first = false;
         }
         result.join("\n")
-    }
-
-    // Returns the final stack value
-    pub fn run(mut self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
-        let (code, mut interned_strings, functions) = self.program.to_tuple();
-        let instructions = code.instructions();
-        let mut ip: usize = 0;
-        while ip < instructions.len() {
-            let (op, line) = instructions.get(ip).unwrap();
-            macro_rules! binary {
-                ($l:tt) => {{
-                    let v1 = try_number(&self.stack.pop().unwrap(), stringify!($l), &line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), stringify!($l), &line)?;
-                    *v2 $l v1;
-                }}
-            }
-            match op {
-                OpCode::Return => (),
-                OpCode::Pop => { self.stack.pop().unwrap(); }
-                OpCode::Print => {
-                    let expr = self.stack.pop().unwrap();
-                    write!(writer, "{}", expr.stringify()).expect("Not written");
-                }
-                OpCode::Number(num) => self.stack.push(Value::Number(*num)),
-                OpCode::UnpatchedJump =>
-                    panic!("Jump should have been patched at line: '{}'", line),
-                OpCode::JumpIfFalse(index) => {
-                    assert!(*index > ip, "Jump target '{}' was smaller than ip '{}'", index, ip);
-                    let should_skip = self.stack.pop().unwrap().is_falsey();
-                    if should_skip {
-                        ip = *index - 1; // ip will increase by one after we exit this pattern match.
-                    }
-                }
-                OpCode::Jump(index) =>
-                    ip = *index - 1, // ip will increase by one after we exit this pattern match.
-                OpCode::Function(index) => {
-                    let rc: &Rc<Function> = functions.get(*index).expect(
-                        format!(
-                            "Invalid index {}, constant size is {}",
-                            index,
-                            functions.len(),
-                        ).deref());
-                    self.stack.push(Value::Function(GcWeak::from(rc)))
-                }
-                OpCode::GetGlobal(name) => {
-                    let rc = name.unwrap_upgrade();
-                    let value = self.globals.get(rc.deref())
-                        .ok_or(VmError(format!("Unrecognized identifier '{}'", rc), *line))?;
-                    self.stack.push(value.clone());
-                }
-                OpCode::DefineGlobal(name) => {
-                    let value = self.stack.pop().unwrap();
-                    self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value);
-                }
-                OpCode::SetGlobal(name) => {
-                    // We not pop on assignment, to allow for chaining.
-                    let value = self.stack.last().unwrap();
-                    self.globals.insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
-                }
-                OpCode::DefineLocal(index) =>
-                    (*self.stack.get_mut(*index).unwrap()) = self.stack.last().unwrap().clone(),
-                OpCode::GetLocal(index) => self.stack.push(self.stack.get(*index).unwrap().clone()),
-                OpCode::SetLocal(index) => {
-                    // We not pop on assignment, to allow for chaining.
-                    let value = self.stack.last().unwrap();
-                    *self.stack.get_mut(*index).unwrap() = value.clone();
-                }
-                OpCode::Bool(bool) => self.stack.push(Value::Bool(*bool)),
-                OpCode::Nil => self.stack.push(Value::Nil),
-                OpCode::String(s) => self.stack.push(Value::String(s.clone())),
-                OpCode::Equals => {
-                    let v1 = self.stack.pop().unwrap();
-                    let v2 = self.stack.last_mut().unwrap();
-                    *v2 = Value::Bool(&v1 == v2);
-                }
-                OpCode::Greater => {
-                    let v1 = try_number(&self.stack.pop().unwrap(), "Greater lhs", &line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Greater rhs", &line)?;
-                    *(self.stack.last_mut().unwrap()) = Value::Bool(*v2 > v1);
-                }
-                OpCode::Less => {
-                    let v1 = try_number(&self.stack.pop().unwrap(), "Less lhs", &line)?;
-                    let v2 = try_number_mut(self.stack.last_mut().unwrap(), "Less rhs", &line)?;
-                    *(self.stack.last_mut().unwrap()) = Value::Bool(*v2 < v1);
-                }
-                OpCode::Add =>
-                    if self.stack.last().unwrap().is_string() {
-                        let popped = &self.stack.pop().unwrap();
-                        let s1: InternedString = TryInto::<InternedString>::try_into(popped).unwrap();
-                        let s2: InternedString =
-                            TryInto::<InternedString>::try_into(self.stack.last().unwrap())
-                                .map_err(|err| VmError(
-                                    format!("{} ({})", err, "String concat"),
-                                    *line,
-                                ))?;
-                        let result = interned_strings.get_or_insert(Rc::new(
-                            format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
-                        *(self.stack.last_mut().unwrap()) = Value::String(result.into());
-                    } else {
-                        binary!(+=)
-                    },
-                OpCode::Subtract => binary!(-=),
-                OpCode::Multiply => binary!(*=),
-                OpCode::Divide => binary!(/=),
-                OpCode::Negate =>
-                    *try_number_mut(self.stack.last_mut().unwrap(), "Negate", &line)? *= -1.0,
-                OpCode::Not =>
-                    *self.stack.last_mut().unwrap() =
-                        Value::Bool(self.stack.last_mut().unwrap().is_falsey()),
-            };
-            ip += 1;
-        }
-        Ok(self.stack)
     }
 }
 
@@ -610,6 +664,19 @@ mod tests {
                 "print areWeHavingItYet;",
             ]),
             "<fn areWeHavingItYet>",
+        )
+    }
+
+    #[test]
+    fn calling_a_function() {
+        assert_eq!(
+            printed_string(vec![
+                "fun areWeHavingItYet() {",
+                "  print \"Yes we are!\";",
+                "}",
+                "areWeHavingItYet();",
+            ]),
+            "Yes we are!",
         )
     }
 }

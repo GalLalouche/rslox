@@ -58,6 +58,9 @@ impl Chunk {
 
     pub fn get_code(&self) -> &Code { &self.code }
     pub fn get_interned_strings(&self) -> &InternedStrings { &self.interned_strings }
+    pub fn get_function(&self, i: usize) -> GcWeak<Function> {
+        GcWeak::from(&self.functions[i].clone())
+    }
 
     pub fn to_tuple(self) -> (Code, InternedStrings, Vec<Rc<Function>>) {
         (self.code, self.interned_strings, self.functions)
@@ -66,6 +69,7 @@ impl Chunk {
 
 impl DeepEq for Chunk {
     fn deep_eq(&self, other: &Self) -> bool {
-        self.code.deep_eq(&other.code) && self.interned_strings == other.interned_strings
+        self.code.deep_eq(&other.code) && self.interned_strings == other.interned_strings &&
+            self.functions.deep_eq(&other.functions)
     }
 }

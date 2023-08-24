@@ -4,6 +4,7 @@ use std::ops::Deref;
 
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::tests::DeepEq;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -23,6 +24,13 @@ pub struct Function {
 
 impl Function {
     pub fn stringify(&self) -> String { format!("<fn {}>", self.name.to_owned()) }
+}
+
+impl DeepEq for Function {
+    fn deep_eq(&self, other: &Self) -> bool {
+        self.name.to_owned() == other.name.to_owned() && self.arity == other.arity &&
+            self.chunk.deep_eq(&other.chunk)
+    }
 }
 
 impl PartialEq<Self> for Value {

@@ -15,7 +15,7 @@ impl Code {
         self.current_location()
     }
 
-    pub fn instructions(self) -> Vec<(OpCode, Line)> { self.0 }
+    pub fn instructions(&self) -> &Vec<(OpCode, Line)> { &self.0 }
     pub fn current_location(&self) -> CodeLocation { self.len() - 1 }
     pub fn next_location(&self) -> CodeLocation { self.len() }
 
