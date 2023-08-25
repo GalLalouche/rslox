@@ -65,7 +65,7 @@ impl OpCode {
             OpCode::Function(_) => "FUNCTION",
             OpCode::DefineGlobal(_) => "DEFINE_GLOBAL",
             OpCode::DefineLocal(_) => "DEFINE_LOCAL",
-            OpCode::Number(_) => "DEFINE_LOCAL",
+            OpCode::Number(_) => "NUMBER",
             OpCode::Bool(_) => "BOOL",
             OpCode::String(_) => "STRING",
             OpCode::GetGlobal(_) => "GET_GLOBAL",
