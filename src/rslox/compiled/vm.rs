@@ -34,11 +34,14 @@ type InstructionPointer = usize;
 
 #[derive(Debug)]
 struct CallFrame {
+    frame_index: usize,
     function: GcWeak<Function>,
     globals: Rc<RefCell<HashMap<String, Value>>>,
     stack: Rc<RefCell<Vec<Value>>>,
     stack_index: usize,
 }
+
+static MAX_FRAMES: usize = 200;
 
 impl CallFrame {
     // Returns the final stack value
@@ -51,6 +54,10 @@ impl CallFrame {
         let mut ip: InstructionPointer = 0;
         let stack = self.stack;
         let globals = self.globals;
+        if self.frame_index >= MAX_FRAMES {
+            let line = instructions.get(0).unwrap().1;
+            return Err(VmError("Stack overflow! Wheeeee!".to_owned(), line));
+        }
         while ip < instructions.len() {
             let (op, line) = instructions.get(ip).unwrap();
             macro_rules! binary {
@@ -140,6 +147,7 @@ impl CallFrame {
                                     *line));
                             }
                             let frame = CallFrame {
+                                frame_index: self.frame_index + 1,
                                 function: f,
                                 stack_index: stack.borrow().len() - arity,
                                 stack: stack.clone(),
@@ -245,6 +253,7 @@ impl VirtualMachine {
         let stack: Rc<RefCell<Vec<Value>>> = Default::default();
         let globals: Rc<RefCell<HashMap<String, Value>>> = Default::default();
         let top_frame = CallFrame {
+            frame_index: 0,
             function: GcWeak::from(&rc_script),
             globals: globals.clone(),
             stack: stack.clone(),
@@ -819,6 +828,20 @@ mod tests {
                     "areWeHavingItYet();",
                 ]).1,
             5,
+        )
+    }
+
+    #[test]
+    fn user_error_on_stack_overflow() {
+        assert_eq!(
+            single_error(
+                vec![
+                    "fun foo() {",
+                    "  foo();",
+                    "}",
+                    "foo();",
+                ]).1,
+            2,
         )
     }
 }
