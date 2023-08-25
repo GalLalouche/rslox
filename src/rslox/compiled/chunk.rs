@@ -58,6 +58,7 @@ impl Chunk {
 
     pub fn get_code(&self) -> &Code { &self.code }
     pub fn get_interned_strings(&self) -> &InternedStrings { &self.interned_strings }
+    pub fn function_count(&self) -> usize { self.functions.len() }
     pub fn get_function(&self, i: usize) -> GcWeak<Function> {
         GcWeak::from(&self.functions[i].clone())
     }

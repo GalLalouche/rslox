@@ -247,9 +247,16 @@ impl VirtualMachine {
     #[cfg(test)]
     fn _disassemble(self) -> String {
         let mut result = Vec::new();
+        result.append(&mut VirtualMachine::_disassemble_chunk(&self.script.chunk));
+        result.join("\n")
+    }
+
+    #[cfg(test)]
+    fn _disassemble_chunk(chunk: &Chunk) -> Vec<String> {
         let mut previous_line: Line = 0;
         let mut is_first = true;
-        for (i, (op, line)) in self.script.chunk.get_code().iter().enumerate() {
+        let mut result = Vec::new();
+        for (i, (op, line)) in chunk.get_code().iter().enumerate() {
             let prefix = format!(
                 "{:0>2}: {:>2}",
                 i,
@@ -282,7 +289,15 @@ impl VirtualMachine {
             previous_line = *line;
             is_first = false;
         }
-        result.join("\n")
+        for i in 0..chunk.function_count() {
+            let function = chunk.get_function(i);
+            result.push(
+                "fun ".to_owned() + function.unwrap_upgrade().name.unwrap_upgrade().deref() + ":");
+            result.append(
+                &mut VirtualMachine::_disassemble_chunk(&function.unwrap_upgrade().chunk));
+            result.push(function.unwrap_upgrade().name.to_owned() + " <end>");
+        }
+        result
     }
 }
 
