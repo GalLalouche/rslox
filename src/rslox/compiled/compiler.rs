@@ -83,7 +83,13 @@ impl FunctionFrame {
         }
     }
 
-    fn finish(self) -> (Chunk, TokenPointer) { (self.chunk, self.current) }
+    fn finish(mut self, line: Line) -> (Chunk, TokenPointer) {
+        if !self.chunk.get_code().last().iter().any(|e| e.0 == OpCode::Return) {
+            self.chunk.write(OpCode::Nil, line);
+            self.chunk.write(OpCode::Return, line);
+        }
+        (self.chunk, self.current)
+    }
 
     fn begin_scope(&mut self) {
         self.depth += 1;
@@ -152,6 +158,8 @@ impl FunctionFrame {
             self.compile_expression().to_nonempty()?;
             self.active_chunk().write(OpCode::Print, line);
             line
+        } else if let Some(line) = self.matches(TokenType::Return) {
+            return self.return_stmt(line).to_nonempty();
         } else if let Some(line) = self.matches(TokenType::If) {
             return self.if_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::While) {
@@ -164,6 +172,17 @@ impl FunctionFrame {
             self.expression_statement().to_nonempty()?
         };
         self.consume(TokenType::Semicolon, None).to_nonempty()?;
+        Ok(line)
+    }
+
+    fn return_stmt(&mut self, line: Line) -> Result<Line, CompilerError> {
+        if let Some(line) = self.matches(TokenType::Semicolon) {
+            self.chunk.write(OpCode::Nil, line);
+        } else {
+            self.compile_expression()?;
+        }
+        self.consume(TokenType::Semicolon, None)?;
+        self.chunk.write(OpCode::Return, line);
         Ok(line)
     }
 
@@ -295,7 +314,7 @@ impl FunctionFrame {
         frame.consume(TokenType::CloseParen, None).to_nonempty()?;
         frame.consume(TokenType::OpenBrace, None).to_nonempty()?;
         let end_line = frame.block()?;
-        let (chunk, new_current) = frame.finish();
+        let (chunk, new_current) = frame.finish(end_line);
         let function = Function { name: name.clone(), chunk, arity };
         self.current = new_current;
         self.chunk.add_function(function, line);
@@ -824,6 +843,8 @@ mod tests {
         let w2 = function_chunk.intern_string("Yes we are!".to_owned());
         function_chunk.write(OpCode::String(w2), 2);
         function_chunk.write(OpCode::Print, 2);
+        function_chunk.write(OpCode::Nil, 3);
+        function_chunk.write(OpCode::Return, 3);
         expected.add_function(Function {
             name: f.clone(),
             arity: 0,
@@ -858,6 +879,8 @@ mod tests {
         function_chunk.write(OpCode::Print, 4);
         function_chunk.write(OpCode::Pop, 5);
         function_chunk.write(OpCode::Pop, 5);
+        function_chunk.write(OpCode::Nil, 5);
+        function_chunk.write(OpCode::Return, 5);
         expected.add_function(Function {
             name: f.clone(),
             arity: 0,
@@ -909,6 +932,8 @@ mod tests {
         function_chunk.write(OpCode::Add, 3);
         function_chunk.write(OpCode::Print, 3);
         function_chunk.write(OpCode::Pop, 4);
+        function_chunk.write(OpCode::Nil, 4);
+        function_chunk.write(OpCode::Return, 4);
         expected.add_function(Function {
             name: f.clone(),
             arity: 2,
@@ -928,7 +953,7 @@ mod tests {
             "}",
             "var x = 52;",
             "var z = 12;",
-            "areWeHavingItYet(x, z);"
+            "areWeHavingItYet(x, z);",
         ]);
         let mut expected: Chunk = Default::default();
         let f = expected.intern_string("areWeHavingItYet".to_owned());
@@ -944,6 +969,8 @@ mod tests {
         function_chunk.write(OpCode::Add, 3);
         function_chunk.write(OpCode::Print, 3);
         function_chunk.write(OpCode::Pop, 4);
+        function_chunk.write(OpCode::Nil, 4);
+        function_chunk.write(OpCode::Return, 4);
         expected.add_function(Function {
             name: f.clone(),
             arity: 2,
@@ -964,6 +991,31 @@ mod tests {
         expected.write(OpCode::Pop, 7);
         expected.write(OpCode::Pop, 7);
         expected.write(OpCode::Return, 7);
+        assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn implicit_function_return() {
+        let compiled = unsafe_compile(vec![
+            "fun foo() {",
+            "  print \"hi\";",
+            "}",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let f = expected.intern_string("foo".to_owned());
+        let mut function_chunk: Chunk = Default::default();
+        let w2 = function_chunk.intern_string("hi".to_owned());
+        function_chunk.write(OpCode::String(w2), 2);
+        function_chunk.write(OpCode::Print, 2);
+        function_chunk.write(OpCode::Nil, 3);
+        function_chunk.write(OpCode::Return, 3);
+        expected.add_function(Function {
+            name: f.clone(),
+            arity: 0,
+            chunk: function_chunk,
+        }, 1);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
+        expected.write(OpCode::Return, 3);
         assert_deep_eq!(expected, compiled);
     }
 }

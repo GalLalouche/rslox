@@ -83,7 +83,10 @@ impl VirtualMachine {
             ));
         }
         self.frames.last_mut().run(writer).map(|maybe_cf| match maybe_cf {
-            None => { self.frames.pop(); }
+            None => {
+                let last_value = self.frames.pop().map(|e| e.stack.borrow().last().cloned().unwrap());
+                last_value.iter().for_each(|v| self.frames.last().stack.borrow_mut().push(v.clone()));
+            }
             Some(cf) => self.frames.push(cf),
         })
     }
@@ -941,6 +944,33 @@ mod tests {
                 "a(1);"
             ]),
             "23121201-1010",
+        )
+    }
+
+    #[test]
+    fn implicit_function_return() {
+        assert_eq!(
+            printed_string(vec![
+                "fun a(x) {",
+                "  print x * x;",
+                "}",
+                "print a(16);"
+            ]),
+            "256nil",
+        )
+    }
+
+    #[test]
+    fn implicit_function_return2() {
+        assert_eq!(
+            printed_string(vec![
+                "fun a(x) {",
+                "  print x * x;",
+                "}",
+                "res = a(16);",
+                "print res;",
+            ]),
+            "256nil",
         )
     }
 }

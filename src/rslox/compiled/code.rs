@@ -24,6 +24,7 @@ impl Code {
     pub fn get_mut(&mut self, i: usize) -> Option<&mut (OpCode, Line)> { self.0.get_mut(i) }
     pub fn remove(&mut self, i: usize) -> (OpCode, Line) { self.0.remove(i) }
     pub fn iter(&self) -> Iter<'_, (OpCode, Line)> { self.0.iter() }
+    pub fn last(&self) -> Option<&(OpCode, Line)> { self.0.last() }
 }
 
 impl DeepEq for Code {
