@@ -35,8 +35,9 @@ type InstructionPointer = usize;
 #[derive(Debug)]
 struct CallFrame {
     function: GcWeak<Function>,
-    stack: Rc<RefCell<Vec<Value>>>,
     globals: Rc<RefCell<HashMap<String, Value>>>,
+    stack: Rc<RefCell<Vec<Value>>>,
+    stack_index: usize,
 }
 
 impl CallFrame {
@@ -99,13 +100,13 @@ impl CallFrame {
                     (*stack.borrow_mut().get_mut(*index).unwrap()) =
                         stack.borrow().last().unwrap().clone(),
                 OpCode::GetLocal(index) => {
-                    let value = stack.borrow().get(*index).unwrap().clone();
+                    let value = stack.borrow().get(*index + self.stack_index).unwrap().clone();
                     stack.borrow_mut().push(value)
                 }
                 OpCode::SetLocal(index) => {
                     // We not pop on assignment, to allow for chaining.
                     let value = stack.borrow().last().cloned().unwrap();
-                    *stack.borrow_mut().get_mut(*index).unwrap() = value.clone();
+                    *stack.borrow_mut().get_mut(*index + self.stack_index).unwrap() = value.clone();
                 }
                 OpCode::Bool(bool) => stack.borrow_mut().push(Value::Bool(*bool)),
                 OpCode::Nil => stack.borrow_mut().push(Value::Nil),
@@ -133,6 +134,7 @@ impl CallFrame {
                         Value::Function(f) => {
                             let frame = CallFrame {
                                 function: f,
+                                stack_index: stack.borrow().len(),
                                 stack: stack.clone(),
                                 globals: globals.clone(),
                             };
@@ -239,6 +241,7 @@ impl VirtualMachine {
             function: GcWeak::from(&rc_script),
             globals: globals.clone(),
             stack: stack.clone(),
+            stack_index: 0,
         };
         top_frame.run(writer)?;
         Ok(stack.take())
@@ -692,6 +695,21 @@ mod tests {
                 "areWeHavingItYet();",
             ]),
             "Yes we are!",
+        )
+    }
+
+    #[test]
+    fn calling_a_function_with_local_computation() {
+        assert_eq!(
+            printed_string(vec![
+                "fun areWeHavingItYet() {",
+                "  var x = 1;",
+                "  var y = 2;",
+                "  print x + y;",
+                "}",
+                "areWeHavingItYet();",
+            ]),
+            "3",
         )
     }
 }
