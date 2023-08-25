@@ -554,6 +554,52 @@ mod tests {
     }
 
     #[test]
+    fn get_local_order() {
+        assert_eq!(
+            printed_string(vec![
+                "{",
+                "  var x = 1;",
+                "  var y = 2;",
+                "  var z = 3;",
+                "  print x;",
+                "  print y;",
+                "  print z;",
+                "}",
+            ]),
+            "123",
+        )
+    }
+
+    #[test]
+    fn get_global_order() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 1;",
+                "var y = 2;",
+                "var z = 3;",
+                "print x;",
+                "print y;",
+                "print z;",
+            ]),
+            "123",
+        )
+    }
+
+    #[test]
+    fn local_variable_order_operation() {
+        assert_eq!(
+            printed_string(vec![
+                "{",
+                "  var x = 1;",
+                "  var y = 2;",
+                "  print x - y;",
+                "}",
+            ]),
+            "-1",
+        )
+    }
+
+    #[test]
     fn if_true_no_else() {
         assert_eq!(
             printed_string(vec![
@@ -710,6 +756,30 @@ mod tests {
                 "areWeHavingItYet();",
             ]),
             "3",
+        )
+    }
+
+    #[test]
+    fn nested_functions() {
+        assert_eq!(
+            printed_string(vec![
+                "fun areWeHavingItYet() {",
+                "  fun one() {",
+                "    var x = 1;",
+                "    var y = 2;",
+                "    print x + y;",
+                "  }",
+                "  fun two() {",
+                "    var x = 10;",
+                "    var y = 20;",
+                "    print x * y;",
+                "  }",
+                "  one();",
+                "  two();",
+                "}",
+                "areWeHavingItYet();",
+            ]),
+            "3200",
         )
     }
 }

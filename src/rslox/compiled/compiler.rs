@@ -464,7 +464,7 @@ impl FunctionFrame {
     }
 
     fn resolve_local(&self, name: &InternedString, line: &Line) -> Result<Option<usize>, CompilerError> {
-        for (i, (local_name, depth)) in self.locals.iter().rev().enumerate() {
+        for (i, (local_name, depth)) in self.locals.iter().enumerate() {
             if depth == &UNINITIALIZED {
                 return Err(CompilerError::new(
                     format!(
@@ -733,6 +733,31 @@ mod tests {
     }
 
     #[test]
+    fn local_variable_order() {
+        let compiled = unsafe_compile(vec![
+            "{",
+            "  var x = 1;",
+            "  var y = 2;",
+            "  print x - y;",
+            "}",
+        ]);
+        let mut expected: Chunk = Default::default();
+        expected.intern_string("x".to_owned());
+        expected.intern_string("y".to_owned());
+        expected.write(OpCode::Number(1.0), 2);
+        expected.write(OpCode::Number(2.0), 3);
+        expected.write(OpCode::GetLocal(0), 4);
+        expected.write(OpCode::GetLocal(1), 4);
+        expected.write(OpCode::Subtract, 4);
+        expected.write(OpCode::Print, 4);
+        expected.write(OpCode::Pop, 5);
+        expected.write(OpCode::Pop, 5);
+        expected.write(OpCode::Return, 5);
+        assert_deep_eq!(compiled,expected)
+    }
+
+
+    #[test]
     fn var_inside_if() {
         assert_msg_contains!(
             compile(unsafe_tokenize(vec![
@@ -786,8 +811,8 @@ mod tests {
         function_chunk.intern_string("y".to_owned());
         function_chunk.write(OpCode::Number(1.0), 2);
         function_chunk.write(OpCode::Number(2.0), 3);
-        function_chunk.write(OpCode::GetLocal(1), 4);
         function_chunk.write(OpCode::GetLocal(0), 4);
+        function_chunk.write(OpCode::GetLocal(1), 4);
         function_chunk.write(OpCode::Add, 4);
         function_chunk.write(OpCode::Print, 4);
         function_chunk.write(OpCode::Pop, 5);
