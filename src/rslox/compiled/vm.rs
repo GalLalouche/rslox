@@ -264,7 +264,7 @@ impl VirtualMachine {
     }
 
     #[cfg(test)]
-    fn _disassemble(self) -> String {
+    fn _disassemble(&self) -> String {
         let mut result = Vec::new();
         result.append(&mut VirtualMachine::_disassemble_chunk(&self.script.chunk));
         result.join("\n")
@@ -350,7 +350,7 @@ mod tests {
         let mut buff = Cursor::new(Vec::new());
         let vm = VirtualMachine::new(unsafe_compile(lines));
         // // Comment this in for debugging the compiled program.
-        // eprintln!("disassembled:\n{}", vm.clone()._disassemble());
+        // eprintln!("disassembled:\n{}", vm._disassemble());
         vm.run(&mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
