@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::rc::Rc;
 use nonempty::NonEmpty;
@@ -24,6 +25,13 @@ impl<A: Debug> SliceExt<A> for NonEmpty<A> {
     fn unwrap_single(&self) -> &A {
         assert!(self.tail().is_empty(), "Expected NonEmpty with single element, got {:?}", self);
         self.first()
+    }
+}
+
+impl<A: Debug> SliceExt<A> for VecDeque<A> {
+    fn unwrap_single(&self) -> &A {
+        assert_eq!(self.len(), 1, "Expected NonEmpty with single element, got {:?}", self);
+        self.get(0).unwrap()
     }
 }
 

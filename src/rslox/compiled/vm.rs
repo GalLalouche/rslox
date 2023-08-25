@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::Write;
 use std::ops::Deref;
@@ -12,23 +12,28 @@ use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
 use crate::rslox::compiled::value::{Function, Value};
 
+type FunctionName = String;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct VmError(String, Line);
-
-fn try_number(value: &Value, msg: &str, line: &Line) -> Result<f64, VmError> {
-    let f: &f64 =
-        value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))?;
-    Ok(*f)
+struct VmError {
+    msg: String,
+    stack_trace: Box<VecDeque<(FunctionName, Line)>>,
 }
 
-fn try_number_mut<'a>(value: &'a mut Value, msg: &str, line: &Line) -> Result<&'a mut f64, VmError> {
-    value.try_into().map_err(|err: String| VmError(format!("{} ({})", err, msg), *line))
+impl VmError {
+    pub fn new(msg: String, function_name: FunctionName, line: Line) -> Self {
+        let mut stack_trace: VecDeque<(FunctionName, Line)> = Default::default();
+        stack_trace.push_back((function_name, line));
+        VmError { msg, stack_trace: Box::new(stack_trace) }
+    }
+    pub fn prepend(&mut self, function_name: FunctionName, line: Line) {
+        self.stack_trace.push_back((function_name, line));
+    }
 }
+
 
 #[derive(Debug, Clone)]
-struct VirtualMachine {
-    script: Function,
-}
+struct VirtualMachine(Chunk);
 
 type InstructionPointer = usize;
 
@@ -41,7 +46,8 @@ struct CallFrame {
     stack_index: usize,
 }
 
-static MAX_FRAMES: usize = 200;
+// TODO this is small because recursion is done by the VM, instead of jumping.
+static MAX_FRAMES: usize = 100;
 
 impl CallFrame {
     // Returns the final stack value
@@ -52,18 +58,23 @@ impl CallFrame {
         let code = chunk.get_code();
         let instructions = code.instructions();
         let mut ip: InstructionPointer = 0;
-        let stack = self.stack;
-        let globals = self.globals;
+        let stack = self.stack.clone();
+        let globals = self.globals.clone();
         if self.frame_index >= MAX_FRAMES {
             let line = instructions.get(0).unwrap().1;
-            return Err(VmError("Stack overflow! Wheeeee!".to_owned(), line));
+            return Err(VmError::new(
+                "Stack overflow! Wheeeee!".to_owned(),
+                self.function.unwrap_upgrade().name.to_owned(),
+                line,
+            ));
         }
         while ip < instructions.len() {
             let (op, line) = instructions.get(ip).unwrap();
             macro_rules! binary {
                 ($l:tt) => {{
-                    let v1 = try_number(&stack.borrow_mut().pop().unwrap(), stringify!($l), &line)?;
-                    *(try_number_mut(
+                    let v1 = self.try_number(
+                        &stack.borrow_mut().pop().unwrap(), stringify!($l), &line)?;
+                    *(self.try_number_mut(
                         stack.borrow_mut().last_mut().unwrap(), stringify!($l), &line))? $l v1;
                 }}
             }
@@ -90,8 +101,8 @@ impl CallFrame {
                     ip = *index - 1, // ip will increase by one after we exit this pattern match.
                 OpCode::GetGlobal(name) => {
                     let rc = name.unwrap_upgrade();
-                    let value = globals.borrow().get(rc.deref()).cloned()
-                        .ok_or(VmError(format!("Unrecognized identifier '{}'", rc), *line))?;
+                    let value = globals.borrow().get(rc.deref()).cloned().ok_or_else(
+                        || self.err(format!("Unrecognized identifier '{}'", rc), *line))?;
                     stack.borrow_mut().push(value.clone());
                 }
                 OpCode::DefineGlobal(name) => {
@@ -124,15 +135,17 @@ impl CallFrame {
                     *stack.borrow_mut().last_mut().unwrap() = Value::Bool(v1 == old_v2);
                 }
                 OpCode::Greater => {
-                    let v1 = try_number(&stack.borrow_mut().pop().unwrap(), "Greater lhs", &line)?;
-                    let v2 =
-                        try_number(&stack.borrow().last().cloned().unwrap(), "Greater rhs", &line)?;
+                    let v1 = self.try_number(
+                        &stack.borrow_mut().pop().unwrap(), "Greater lhs", &line)?;
+                    let v2 = self.try_number(
+                        &stack.borrow().last().cloned().unwrap(), "Greater rhs", &line)?;
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 > v1);
                 }
                 OpCode::Less => {
-                    let v1 = try_number(&stack.borrow_mut().pop().unwrap(), "Less lhs", &line)?;
-                    let v2 =
-                        try_number(&stack.borrow().last().cloned().unwrap(), "Less rhs", &line)?;
+                    let v1 = self.try_number(
+                        &stack.borrow_mut().pop().unwrap(), "Less lhs", &line)?;
+                    let v2 = self.try_number(
+                        &stack.borrow().last().cloned().unwrap(), "Less rhs", &line)?;
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 < v1);
                 }
                 OpCode::Call(arg_count) => {
@@ -142,7 +155,7 @@ impl CallFrame {
                         Value::Function(f) => {
                             let arity = f.unwrap_upgrade().arity;
                             if arity != *arg_count {
-                                return Err(VmError(
+                                return Err(self.err(
                                     format!("Expected {} arguments but got {}", arity, arg_count),
                                     *line));
                             }
@@ -153,10 +166,16 @@ impl CallFrame {
                                 stack: stack.clone(),
                                 globals: globals.clone(),
                             };
-                            frame.run(writer)?;
+                            let mut result: Result<(), VmError> = frame.run(writer);
+                            match &mut result {
+                                Err(ref mut e) => e.prepend(
+                                    self.function.unwrap_upgrade().name.to_owned(), *line),
+                                _ => ()
+                            }
+                            result?
                         }
                         v => {
-                            return Err(VmError(
+                            return Err(self.err(
                                 format!("Expected function, but got '{}'", v.stringify()),
                                 *line));
                         }
@@ -168,10 +187,8 @@ impl CallFrame {
                         let s1: InternedString = TryInto::<InternedString>::try_into(popped).unwrap();
                         let s2: InternedString =
                             TryInto::<InternedString>::try_into(stack.borrow().last().unwrap())
-                                .map_err(|err| VmError(
-                                    format!("{} ({})", err, "String concat"),
-                                    *line,
-                                ))?;
+                                .map_err(|err|
+                                    self.err(format!("{} ({})", err, "String concat"), *line))?;
                         let result = interned_strings.get_or_insert(Rc::new(
                             format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
                         *(stack.borrow_mut().last_mut().unwrap()) = Value::String(result.into());
@@ -181,9 +198,11 @@ impl CallFrame {
                 OpCode::Subtract => binary!(-=),
                 OpCode::Multiply => binary!(*=),
                 OpCode::Divide => binary!(/=),
-                OpCode::Negate =>
-                    *try_number_mut(stack.borrow_mut().last_mut().unwrap(), "Negate", &line)? *=
-                        -1.0,
+                OpCode::Negate => {
+                    *self.try_number_mut(
+                        stack.borrow_mut().last_mut().unwrap(), "Negate", &line,
+                    )? *= -1.0;
+                }
                 OpCode::Not => {
                     let result = stack.borrow().last().unwrap().is_falsey();
                     *stack.borrow_mut().last_mut().unwrap() = Value::Bool(result)
@@ -192,6 +211,25 @@ impl CallFrame {
             ip += 1;
         }
         Ok(())
+    }
+
+    fn err(&self, msg: String, line: Line) -> VmError {
+        VmError::new(msg, self.function.unwrap_upgrade().name.to_owned(), line)
+    }
+
+    fn try_number(&self, value: &Value, msg: &str, line: &Line) -> Result<f64, VmError> {
+        let f: &f64 =
+            value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), *line))?;
+        Ok(*f)
+    }
+
+    fn try_number_mut<'a>(
+        &self,
+        value: &'a mut Value,
+        msg: &str,
+        line: &Line,
+    ) -> Result<&'a mut f64, VmError> {
+        value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), *line))
     }
 }
 
@@ -238,23 +276,18 @@ struct TracedCommand {
 }
 
 impl VirtualMachine {
-    pub fn new(program: Chunk) -> Self {
-        let script_name: Rc<String> = Rc::from("<script>".to_owned());
-        let script = Function {
-            name: GcWeak::from(&script_name),
-            arity: 0,
-            chunk: program,
-        };
-        VirtualMachine { script }
-    }
-
     pub fn run(self, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
-        let rc_script = Rc::from(self.script);
+        let rc_name = Rc::from("<script>".to_owned());
+        let function = Rc::from(Function {
+            name: GcWeak::from(&rc_name),
+            arity: 0,
+            chunk: self.0,
+        });
         let stack: Rc<RefCell<Vec<Value>>> = Default::default();
         let globals: Rc<RefCell<HashMap<String, Value>>> = Default::default();
         let top_frame = CallFrame {
             frame_index: 0,
-            function: GcWeak::from(&rc_script),
+            function: GcWeak::from(&function),
             globals: globals.clone(),
             stack: stack.clone(),
             stack_index: 0,
@@ -266,7 +299,7 @@ impl VirtualMachine {
     #[cfg(test)]
     fn _disassemble(&self) -> String {
         let mut result = Vec::new();
-        result.append(&mut VirtualMachine::_disassemble_chunk(&self.script.chunk));
+        result.append(&mut VirtualMachine::_disassemble_chunk(&self.0));
         result.join("\n")
     }
 
@@ -325,6 +358,7 @@ impl VirtualMachine {
 mod tests {
     use std::io::{Cursor, sink};
 
+    use crate::assert_eq_vec;
     use crate::rslox::common::utils::SliceExt;
     use crate::rslox::compiled::op_code::OpCode;
     use crate::rslox::compiled::tests::unsafe_compile;
@@ -340,7 +374,7 @@ mod tests {
             _ => false
         });
         compiled.remove(code.len() - 2);
-        let stack = VirtualMachine::new(compiled).run(&mut sink()).unwrap();
+        let stack = VirtualMachine(compiled).run(&mut sink()).unwrap();
         // Last is return, which as an empty, because second from last is pop, which will also end
         // with an empty stack.
         stack.unwrap_single().into()
@@ -348,7 +382,7 @@ mod tests {
 
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
-        let vm = VirtualMachine::new(unsafe_compile(lines));
+        let vm = VirtualMachine(unsafe_compile(lines));
         // // Comment this in for debugging the compiled program.
         // eprintln!("disassembled:\n{}", vm._disassemble());
         vm.run(&mut buff).unwrap();
@@ -356,7 +390,7 @@ mod tests {
     }
 
     fn single_error(lines: Vec<&str>) -> VmError {
-        VirtualMachine::new(unsafe_compile(lines)).run(&mut sink()).unwrap_err()
+        VirtualMachine(unsafe_compile(lines)).run(&mut sink()).unwrap_err()
     }
 
     #[test]
@@ -394,7 +428,7 @@ mod tests {
         assert_eq!(
             single_error(vec![
                 "-false;",
-            ]).1,
+            ]).stack_trace.unwrap_single().1,
             1,
         )
     }
@@ -481,7 +515,7 @@ mod tests {
 
     #[test]
     fn stack_is_empty_after_statement() {
-        let stack = VirtualMachine::new(unsafe_compile(vec!["1 + 2;"])).run(&mut sink()).unwrap();
+        let stack = VirtualMachine(unsafe_compile(vec!["1 + 2;"])).run(&mut sink()).unwrap();
         assert_eq!(stack.len(), 0);
     }
 
@@ -826,7 +860,7 @@ mod tests {
                     "  print x + y + z;",
                     "}",
                     "areWeHavingItYet();",
-                ]).1,
+                ]).stack_trace.unwrap_single().1,
             5,
         )
     }
@@ -840,8 +874,32 @@ mod tests {
                     "  foo();",
                     "}",
                     "foo();",
-                ]).1,
-            2,
+                ]).msg,
+            "Stack overflow! Wheeeee!".to_owned(),
+        )
+    }
+
+    #[test]
+    fn prints_stack_trace_on_error() {
+        let err = single_error(
+            vec![
+                "fun a() { b(); }",
+                "fun b() { c(); }",
+                "fun c() {",
+                "  c(\"too\", \"many\");",
+                "}",
+                "a();",
+            ]);
+        assert_eq!(err.msg, "Expected 0 arguments but got 2");
+        let vec: Vec<(FunctionName, Line)> = Vec::from(err.stack_trace.deref().clone());
+        assert_eq_vec!(
+            vec,
+            vec![
+                ("c".to_owned(), 4 as usize),
+                ("b".to_owned(), 2 as usize),
+                ("a".to_owned(), 1 as usize),
+                ("<script>".to_owned(), 6 as usize),
+            ],
         )
     }
 }

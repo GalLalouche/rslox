@@ -9,7 +9,7 @@ pub struct GcWeak<A>(Weak<A>);
 
 impl<A> GcWeak<A> {
     pub fn unwrap_upgrade(&self) -> Rc<A> {
-        self.0.upgrade().unwrap()
+        self.0.upgrade().expect("GcWeak value was already collected")
     }
 }
 
