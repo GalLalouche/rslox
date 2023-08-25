@@ -920,4 +920,27 @@ mod tests {
             ],
         )
     }
+
+    #[test]
+    fn functions_calling_functions_calling_functions() {
+        assert_eq!(
+            printed_string(vec![
+                "fun a(x) {",
+                "  b(x + x, x * x);",
+                "  b(x - x, x / x);",
+                "}",
+                "fun b(x, y) {",
+                "  c(x * y, x + y, x - y);",
+                "  c(x, y, x / y);",
+                "}",
+                "fun c(x, y, z) {",
+                "  print x;",
+                "  print y;",
+                "  print z;",
+                "}",
+                "a(1);"
+            ]),
+            "23121201-1010",
+        )
+    }
 }
