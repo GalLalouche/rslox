@@ -12,7 +12,7 @@ use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonE
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::{Code, Line};
-use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
+use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode};
 use crate::rslox::compiled::value::Function;
 
 type CompilerError = ParserError;
@@ -279,12 +279,24 @@ impl FunctionFrame {
         let (name, line) = self.parse_variable().to_nonempty()?;
         self.mark_initialized();
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        self.consume(TokenType::CloseParen, None).to_nonempty()?;
-        self.consume(TokenType::OpenBrace, None).to_nonempty()?;
         let mut frame = FunctionFrame::new(self.tokens.clone(), self.current);
+        frame.depth += 1;
+        let mut arity = 0;
+        if frame.peek_type().deref() != &TokenType::CloseParen {
+            loop {
+                arity += 1;
+                let (var_name, line) = frame.parse_variable().to_nonempty()?;
+                frame.define_variable(var_name, line).to_nonempty()?;
+                if frame.matches(TokenType::Comma).is_none() {
+                    break;
+                }
+            }
+        }
+        frame.consume(TokenType::CloseParen, None).to_nonempty()?;
+        frame.consume(TokenType::OpenBrace, None).to_nonempty()?;
         let end_line = frame.block()?;
         let (chunk, new_current) = frame.finish();
-        let function = Function { name: name.clone(), chunk, arity: 0 };
+        let function = Function { name: name.clone(), chunk, arity };
         self.current = new_current;
         self.chunk.add_function(function, line);
         self.define_variable(name.clone(), line).to_nonempty()?;
@@ -428,7 +440,7 @@ impl FunctionFrame {
             let Token { line, r#type } = self.advance();
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
-                TokenType::OpenParen => Left(OpCode::Call),
+                TokenType::OpenParen => self.argument_list().map(|c| Left(OpCode::Call(c)))?,
                 TokenType::Minus => Left(OpCode::Subtract),
                 TokenType::Plus => Left(OpCode::Add),
                 TokenType::Slash => Left(OpCode::Divide),
@@ -441,31 +453,51 @@ impl FunctionFrame {
                 TokenType::GreaterEqual => Right(OpCode::Less),
                 _ => panic!()
             };
-            if op == Left(OpCode::Call) {
-                self.consume(
-                    TokenType::CloseParen,
-                    Some("Only procedures are supported right now".to_owned()),
-                )?;
-                self.active_chunk().write(OpCode::Call, line);
-            } else {
-                self.compile_precedence(next_precedence)?;
-                match op {
-                    Left(op) => { self.active_chunk().write(op, line); }
-                    Right(op) => {
-                        self.active_chunk().write(op, line);
-                        self.active_chunk().write(OpCode::Not, line);
+            match op {
+                Left(OpCode::Call(c)) => {
+                    self.consume(
+                        TokenType::CloseParen,
+                        Some("Only procedures are supported right now".to_owned()),
+                    )?;
+                    self.active_chunk().write(OpCode::Call(c), line);
+                    for _ in 0..c {
+                        self.active_chunk().write(OpCode::Pop, line);
+                    }
+                }
+                _ => {
+                    self.compile_precedence(next_precedence)?;
+                    match op {
+                        Left(op) => { self.active_chunk().write(op, line); }
+                        Right(op) => {
+                            self.active_chunk().write(op, line);
+                            self.active_chunk().write(OpCode::Not, line);
+                        }
+                    }
+                    last_line = line;
+                    if !self.is_at_end() && can_assign && self.peek_type().deref() == &TokenType::Equal {
+                        return Err(CompilerError::new(
+                            "Invalid assignment target.",
+                            self.tokens.borrow()[self.current].clone(),
+                        ));
                     }
                 }
             }
-            last_line = line;
-            if !self.is_at_end() && can_assign && self.peek_type().deref() == &TokenType::Equal {
-                return Err(CompilerError::new(
-                    "Invalid assignment target.",
-                    self.tokens.borrow()[self.current].clone(),
-                ));
-            }
         }
         Ok(last_line)
+    }
+
+    fn argument_list(&mut self) -> Result<ArgCount, CompilerError> {
+        let mut arity = 0;
+        if self.peek_type().deref() != &TokenType::CloseParen {
+            loop {
+                self.compile_expression()?;
+                arity += 1;
+                if self.matches(TokenType::Comma).is_none() {
+                    break;
+                }
+            }
+        }
+        Ok(arity)
     }
 
     fn active_chunk(&mut self) -> &mut Chunk {
@@ -787,18 +819,18 @@ mod tests {
             "print areWeHavingItYet;",
         ]);
         let mut expected: Chunk = Default::default();
-        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        let f = expected.intern_string("areWeHavingItYet".to_owned());
         let mut function_chunk: Chunk = Default::default();
         let w2 = function_chunk.intern_string("Yes we are!".to_owned());
         function_chunk.write(OpCode::String(w2), 2);
         function_chunk.write(OpCode::Print, 2);
         expected.add_function(Function {
-            name: w.clone(),
+            name: f.clone(),
             arity: 0,
             chunk: function_chunk,
         }, 1);
-        expected.write(OpCode::DefineGlobal(w.clone()), 1);
-        expected.write(OpCode::GetGlobal(w.clone()), 4);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
+        expected.write(OpCode::GetGlobal(f.clone()), 4);
         expected.write(OpCode::Print, 4);
         expected.write(OpCode::Return, 4);
         assert_deep_eq!(expected, compiled);
@@ -814,7 +846,7 @@ mod tests {
             "}",
         ]);
         let mut expected: Chunk = Default::default();
-        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        let f = expected.intern_string("areWeHavingItYet".to_owned());
         let mut function_chunk: Chunk = Default::default();
         function_chunk.intern_string("x".to_owned());
         function_chunk.intern_string("y".to_owned());
@@ -827,11 +859,11 @@ mod tests {
         function_chunk.write(OpCode::Pop, 5);
         function_chunk.write(OpCode::Pop, 5);
         expected.add_function(Function {
-            name: w.clone(),
+            name: f.clone(),
             arity: 0,
             chunk: function_chunk,
         }, 1);
-        expected.write(OpCode::DefineGlobal(w.clone()), 1);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::Return, 5);
         assert_deep_eq!(expected, compiled);
     }
@@ -845,11 +877,11 @@ mod tests {
             "areWeHavingItYet();",
         ]);
         let mut expected: Chunk = Default::default();
-        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        let f = expected.intern_string("areWeHavingItYet".to_owned());
         expected.write(OpCode::Function(0), 1);
-        expected.write(OpCode::DefineGlobal(w.clone()), 1);
-        expected.write(OpCode::GetGlobal(w.clone()), 4);
-        expected.write(OpCode::Call, 4);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
+        expected.write(OpCode::GetGlobal(f.clone()), 4);
+        expected.write(OpCode::Call(0), 4);
         expected.write(OpCode::Pop, 4);
         expected.write(OpCode::Return, 4);
         assert_deep_eq!(expected.get_code(), compiled.get_code());
@@ -859,30 +891,79 @@ mod tests {
     fn define_function_with_args() {
         let compiled = unsafe_compile(vec![
             "fun areWeHavingItYet(x, y) {",
-            "  var z = 1",
+            "  var z = 1;",
             "  print x + y + z;",
             "}",
         ]);
         let mut expected: Chunk = Default::default();
-        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        let f = expected.intern_string("areWeHavingItYet".to_owned());
         let mut function_chunk: Chunk = Default::default();
         function_chunk.intern_string("x".to_owned());
         function_chunk.intern_string("y".to_owned());
+        function_chunk.intern_string("z".to_owned());
         function_chunk.write(OpCode::Number(1.0), 2);
         function_chunk.write(OpCode::GetLocal(0), 3);
         function_chunk.write(OpCode::GetLocal(1), 3);
+        function_chunk.write(OpCode::Add, 3);
         function_chunk.write(OpCode::GetLocal(2), 3);
-        function_chunk.write(OpCode::Add, 4);
-        function_chunk.write(OpCode::Add, 4);
-        function_chunk.write(OpCode::Print, 4);
-        function_chunk.write(OpCode::Pop, 5);
+        function_chunk.write(OpCode::Add, 3);
+        function_chunk.write(OpCode::Print, 3);
+        function_chunk.write(OpCode::Pop, 4);
         expected.add_function(Function {
-            name: w.clone(),
-            arity: 0,
+            name: f.clone(),
+            arity: 2,
             chunk: function_chunk,
         }, 1);
-        expected.write(OpCode::DefineGlobal(w.clone()), 1);
-        expected.write(OpCode::Return, 5);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
+        expected.write(OpCode::Return, 4);
+        assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn call_function_with_args() {
+        let compiled = unsafe_compile(vec![
+            "fun areWeHavingItYet(x, y) {",
+            "  var z = 1;",
+            "  print x + y + z;",
+            "}",
+            "var x = 52;",
+            "var z = 12;",
+            "areWeHavingItYet(x, z);"
+        ]);
+        let mut expected: Chunk = Default::default();
+        let f = expected.intern_string("areWeHavingItYet".to_owned());
+        let mut function_chunk: Chunk = Default::default();
+        function_chunk.intern_string("x".to_owned());
+        function_chunk.intern_string("y".to_owned());
+        function_chunk.intern_string("z".to_owned());
+        function_chunk.write(OpCode::Number(1.0), 2);
+        function_chunk.write(OpCode::GetLocal(0), 3);
+        function_chunk.write(OpCode::GetLocal(1), 3);
+        function_chunk.write(OpCode::Add, 3);
+        function_chunk.write(OpCode::GetLocal(2), 3);
+        function_chunk.write(OpCode::Add, 3);
+        function_chunk.write(OpCode::Print, 3);
+        function_chunk.write(OpCode::Pop, 4);
+        expected.add_function(Function {
+            name: f.clone(),
+            arity: 2,
+            chunk: function_chunk,
+        }, 1);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
+        expected.write(OpCode::Number(52.0), 5);
+        let x = expected.intern_string("x".to_owned());
+        expected.write(OpCode::DefineGlobal(x.clone()), 5);
+        expected.write(OpCode::Number(12.0), 6);
+        let z = expected.intern_string("z".to_owned());
+        expected.write(OpCode::DefineGlobal(z.clone()), 6);
+        expected.write(OpCode::GetGlobal(f.clone()), 7);
+        expected.write(OpCode::GetGlobal(x.clone()), 7);
+        expected.write(OpCode::GetGlobal(z.clone()), 7);
+        expected.write(OpCode::Call(2), 7);
+        expected.write(OpCode::Pop, 7);
+        expected.write(OpCode::Pop, 7);
+        expected.write(OpCode::Pop, 7);
+        expected.write(OpCode::Return, 7);
         assert_deep_eq!(expected, compiled);
     }
 }

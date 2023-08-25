@@ -128,13 +128,20 @@ impl CallFrame {
                         try_number(&stack.borrow().last().cloned().unwrap(), "Less rhs", &line)?;
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 < v1);
                 }
-                OpCode::Call => {
-                    let last = stack.borrow().last().cloned().unwrap();
-                    match last {
+                OpCode::Call(arg_count) => {
+                    let func_index = stack.borrow().len() - arg_count - 1;
+                    let func = stack.borrow().get(func_index).cloned().unwrap();
+                    match func {
                         Value::Function(f) => {
+                            let arity = f.unwrap_upgrade().arity;
+                            if arity != *arg_count {
+                                return Err(VmError(
+                                    format!("Expected {} arguments but got {}", arity, arg_count),
+                                    *line));
+                            }
                             let frame = CallFrame {
                                 function: f,
-                                stack_index: stack.borrow().len(),
+                                stack_index: stack.borrow().len() - arity,
                                 stack: stack.clone(),
                                 globals: globals.clone(),
                             };
@@ -284,9 +291,10 @@ impl VirtualMachine {
                 OpCode::SetLocal(index) => format!("{}", index),
                 OpCode::Bool(bool) => format!("{}", bool),
                 OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
+                OpCode::Call(arg_count) => format!("'{}'", arg_count),
                 OpCode::Return | OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals |
                 OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
-                OpCode::Divide | OpCode::Negate | OpCode::Not | OpCode::Call => "".to_owned(),
+                OpCode::Divide | OpCode::Negate | OpCode::Not => "".to_owned(),
             });
             result.push(command);
             previous_line = *line;
@@ -780,6 +788,37 @@ mod tests {
                 "areWeHavingItYet();",
             ]),
             "3200",
+        )
+    }
+
+    #[test]
+    fn calling_a_function_with_arguments() {
+        assert_eq!(
+            printed_string(vec![
+                "fun areWeHavingItYet(x, y) {",
+                "  var z = \"3\";",
+                "  print x + y + z;",
+                "}",
+                "var x = \"1\";",
+                "var z = \"2\";",
+                "areWeHavingItYet(x, z);",
+            ]),
+            "123",
+        )
+    }
+
+    #[test]
+    fn user_error_on_not_enough_arguments() {
+        assert_eq!(
+            single_error(
+                vec![
+                    "fun areWeHavingItYet(x, y) {",
+                    "  var z = \"3\";",
+                    "  print x + y + z;",
+                    "}",
+                    "areWeHavingItYet();",
+                ]).1,
+            5,
         )
     }
 }

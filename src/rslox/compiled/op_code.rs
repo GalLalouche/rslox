@@ -4,6 +4,7 @@ use crate::rslox::compiled::tests::DeepEq;
 pub type CodeLocation = usize;
 pub type ConstantIndex = usize;
 pub type StackLocation = usize;
+pub type ArgCount = usize;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
@@ -25,7 +26,7 @@ pub enum OpCode {
     GetLocal(StackLocation),
     SetLocal(StackLocation),
     Nil,
-    Call,
+    Call(ArgCount),
     Add,
     Subtract,
     Multiply,
@@ -74,7 +75,7 @@ impl OpCode {
             OpCode::SetLocal(_) => "SET_LOCAL",
             OpCode::Nil => "NIL",
             OpCode::Add => "ADD",
-            OpCode::Call => "CALL",
+            OpCode::Call(_) => "CALL",
             OpCode::Subtract => "SUBTRACT",
             OpCode::Multiply => "MULTIPLY",
             OpCode::Divide => "DIVIDE",
