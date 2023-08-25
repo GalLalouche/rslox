@@ -854,4 +854,35 @@ mod tests {
         expected.write(OpCode::Return, 4);
         assert_deep_eq!(expected.get_code(), compiled.get_code());
     }
+
+    #[test]
+    fn define_function_with_args() {
+        let compiled = unsafe_compile(vec![
+            "fun areWeHavingItYet(x, y) {",
+            "  var z = 1",
+            "  print x + y + z;",
+            "}",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        let mut function_chunk: Chunk = Default::default();
+        function_chunk.intern_string("x".to_owned());
+        function_chunk.intern_string("y".to_owned());
+        function_chunk.write(OpCode::Number(1.0), 2);
+        function_chunk.write(OpCode::GetLocal(0), 3);
+        function_chunk.write(OpCode::GetLocal(1), 3);
+        function_chunk.write(OpCode::GetLocal(2), 3);
+        function_chunk.write(OpCode::Add, 4);
+        function_chunk.write(OpCode::Add, 4);
+        function_chunk.write(OpCode::Print, 4);
+        function_chunk.write(OpCode::Pop, 5);
+        expected.add_function(Function {
+            name: w.clone(),
+            arity: 0,
+            chunk: function_chunk,
+        }, 1);
+        expected.write(OpCode::DefineGlobal(w.clone()), 1);
+        expected.write(OpCode::Return, 5);
+        assert_deep_eq!(expected, compiled);
+    }
 }
