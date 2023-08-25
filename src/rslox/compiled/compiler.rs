@@ -277,6 +277,7 @@ impl FunctionFrame {
 
     fn declare_function(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         let (name, line) = self.parse_variable().to_nonempty()?;
+        self.mark_initialized();
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.consume(TokenType::OpenBrace, None).to_nonempty()?;
@@ -292,9 +293,6 @@ impl FunctionFrame {
 
     fn declare_variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
         let (name, line) = self.parse_variable()?;
-        if self.depth > 0 {
-            self.locals.push((name.clone(), UNINITIALIZED));
-        }
         if can_assign && self.matches(TokenType::Equal).is_some() {
             self.compile_expression()
         } else {
@@ -316,7 +314,11 @@ impl FunctionFrame {
                 token: Token { r#type: e, line },
             })
         }?;
-        Ok((self.chunk.intern_string(name), line))
+        let interned = self.chunk.intern_string(name);
+        if self.depth > 0 {
+            self.locals.push((interned.clone(), UNINITIALIZED));
+        }
+        Ok((interned, line))
     }
 
     fn define_variable(&mut self, name: InternedString, line: Line) -> Result<(), CompilerError> {
@@ -342,8 +344,15 @@ impl FunctionFrame {
                 }
             }
             assert_eq!(self.locals.last().unwrap().0, name);
-            self.locals.last_mut().unwrap().1 = self.depth;
+            self.mark_initialized();
             Ok(())
+        }
+    }
+
+    fn mark_initialized(&mut self) {
+        // No need to initialize globals.
+        if self.depth != 0 {
+            self.locals.last_mut().unwrap().1 = self.depth;
         }
     }
 
