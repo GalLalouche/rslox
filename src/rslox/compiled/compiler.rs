@@ -117,9 +117,9 @@ impl FunctionFrame {
                 None
             }};
         }
-        if let Some(line) = self.matches(TokenType::Fun) {
+        if let Some(_) = self.matches(TokenType::Fun) {
             match self.declare_function() {
-                Ok(_) => Some(line),
+                Ok(l) => Some(l),
                 Err(errs) => {
                     for err in errs {
                         errors.push(err);
@@ -158,8 +158,8 @@ impl FunctionFrame {
             return self.while_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::For) {
             return self.for_stmt(line); // Skips semicolon
-        } else if let Some(line) = self.matches(TokenType::OpenBrace) {
-            return self.block(line);
+        } else if let Some(_) = self.matches(TokenType::OpenBrace) {
+            return self.block();
         } else {
             self.expression_statement().to_nonempty()?
         };
@@ -167,18 +167,18 @@ impl FunctionFrame {
         Ok(line)
     }
 
-    fn block(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
+    fn block(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         self.begin_scope();
         let mut errors = Vec::new();
         while !self.is_at_end() && self.peek_type().deref() != &TokenType::CloseBrace {
             self.declaration(&mut errors);
         }
-        self.consume(TokenType::CloseBrace, None).to_nonempty()?;
+        let ending_line = self.consume(TokenType::CloseBrace, None).to_nonempty()?;
         // Skip the semicolon
         return match NonEmpty::from_vec(errors) {
             None => {
-                self.end_scope(line);
-                Ok(line)
+                self.end_scope(ending_line);
+                Ok(ending_line)
             }
             Some(errs) => Err(errs),
         };
@@ -275,18 +275,19 @@ impl FunctionFrame {
         Ok(())
     }
 
-    fn declare_function(&mut self) -> Result<(), NonEmpty<CompilerError>> {
+    fn declare_function(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         let (name, line) = self.parse_variable().to_nonempty()?;
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.consume(TokenType::OpenBrace, None).to_nonempty()?;
         let mut frame = FunctionFrame::new(self.tokens.clone(), self.current);
-        frame.block(line)?;
+        let end_line = frame.block()?;
         let (chunk, new_current) = frame.finish();
         let function = Function { name: name.clone(), chunk, arity: 0 };
         self.current = new_current;
         self.chunk.add_function(function, line);
-        self.define_variable(name.clone(), line).to_nonempty()
+        self.define_variable(name.clone(), line).to_nonempty()?;
+        Ok(end_line)
     }
 
     fn declare_variable(&mut self, can_assign: bool) -> Result<(), CompilerError> {
@@ -478,7 +479,7 @@ impl FunctionFrame {
         return Ok(None);
     }
 
-    fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<(), CompilerError> {
+    fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<Line, CompilerError> {
         let expected_msg = msg.unwrap_or(expected.to_string());
         if self.is_at_end() {
             return Err(CompilerError::new(
@@ -500,7 +501,7 @@ impl FunctionFrame {
             ))
         } else {
             assert_ne!(expected, TokenType::Eof);
-            Ok(())
+            Ok(token.line)
         }
     }
 
@@ -766,6 +767,38 @@ mod tests {
         expected.write(OpCode::GetGlobal(w.clone()), 4);
         expected.write(OpCode::Print, 4);
         expected.write(OpCode::Return, 4);
+        assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn define_function_with_local_variables() {
+        let compiled = unsafe_compile(vec![
+            "fun areWeHavingItYet() {",
+            "  var x = 1;",
+            "  var y = 2;",
+            "  print x + y;",
+            "}",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let w = expected.intern_string("areWeHavingItYet".to_owned());
+        let mut function_chunk: Chunk = Default::default();
+        function_chunk.intern_string("x".to_owned());
+        function_chunk.intern_string("y".to_owned());
+        function_chunk.write(OpCode::Number(1.0), 2);
+        function_chunk.write(OpCode::Number(2.0), 3);
+        function_chunk.write(OpCode::GetLocal(1), 4);
+        function_chunk.write(OpCode::GetLocal(0), 4);
+        function_chunk.write(OpCode::Add, 4);
+        function_chunk.write(OpCode::Print, 4);
+        function_chunk.write(OpCode::Pop, 5);
+        function_chunk.write(OpCode::Pop, 5);
+        expected.add_function(Function {
+            name: w.clone(),
+            arity: 0,
+            chunk: function_chunk,
+        }, 1);
+        expected.write(OpCode::DefineGlobal(w.clone()), 1);
+        expected.write(OpCode::Return, 5);
         assert_deep_eq!(expected, compiled);
     }
 
