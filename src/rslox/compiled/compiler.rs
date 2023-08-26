@@ -6,12 +6,11 @@ use std::rc::Rc;
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
-use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
-use crate::rslox::compiled::code::{Code, Line};
+use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode};
 use crate::rslox::compiled::value::Function;
 
@@ -93,11 +92,16 @@ impl FunctionFrame {
 
     fn end_scope(&mut self, line: Line) {
         assert!(self.depth > 0);
-        while self.locals.last().map(|e| e.1).contains(&self.depth) {
+        let amount_to_keep =
+            self.locals.iter().rposition(|e| e.1 != self.depth).map(|e| e + 1).unwrap_or(0);
+        let amount_to_drop = self.locals.len() - amount_to_keep;
+        if amount_to_drop == 1 {
             self.chunk.write(OpCode::Pop, line);
             self.locals.pop().unwrap();
+        } else if amount_to_drop > 0 {
+            self.chunk.write(OpCode::PopN(amount_to_drop), line);
+            self.locals.truncate(amount_to_keep);
         }
-        self.depth -= 1;
     }
 
     fn synchronize(&mut self) {
@@ -472,7 +476,7 @@ impl FunctionFrame {
                 Left(OpCode::Call(c)) => {
                     self.consume(TokenType::CloseParen, None)?;
                     self.active_chunk().write(OpCode::Call(c), line);
-                    self.active_chunk().write(OpCode::PopN(c+3), line);
+                    self.active_chunk().write(OpCode::PopN(c + 3), line);
                 }
                 _ => {
                     self.compile_precedence(next_precedence)?;
@@ -641,6 +645,7 @@ mod tests {
     use crate::{assert_deep_eq, assert_msg_contains};
     use crate::rslox::common::tests::unsafe_tokenize;
     use crate::rslox::common::utils::SliceExt;
+    use crate::rslox::compiled::code::Code;
     use crate::rslox::compiled::tests::unsafe_compile;
 
     use super::*;
@@ -797,9 +802,8 @@ mod tests {
         expected.write(OpCode::GetLocal(1), 4);
         expected.write(OpCode::Subtract, 4);
         expected.write(OpCode::Print, 4);
-        expected.write(OpCode::Pop, 5);
-        expected.write(OpCode::Pop, 5);
-        assert_deep_eq!(compiled,expected)
+        expected.write(OpCode::PopN(2), 5);
+        assert_deep_eq!(expected, compiled)
     }
 
 
@@ -862,8 +866,7 @@ mod tests {
         function_chunk.write(OpCode::GetLocal(1), 4);
         function_chunk.write(OpCode::Add, 4);
         function_chunk.write(OpCode::Print, 4);
-        function_chunk.write(OpCode::Pop, 5);
-        function_chunk.write(OpCode::Pop, 5);
+        function_chunk.write(OpCode::PopN(2), 5);
         function_chunk.write(OpCode::Nil, 5);
         function_chunk.write(OpCode::Return, 5);
         expected.add_function(Function {
@@ -1007,7 +1010,7 @@ mod tests {
             "fun plus(x, y) {",
             "  return x + y;",
             "}",
-            "print plus(10, 20);"
+            "print plus(10, 20);",
         ]);
 
         let mut expected: Chunk = Default::default();

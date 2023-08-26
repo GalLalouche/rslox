@@ -40,3 +40,20 @@ pub fn debug_mk_string<'a, A: Debug + 'a, I>(i: &'a I) -> String
 {
     i.into_iter().map(|e: &A| format!("{:?}", e)).collect::<Vec<_>>().join("\n")
 }
+
+
+trait Truncateable {
+    fn len(&self) -> usize;
+    fn truncate(&mut self, amount: usize) -> ();
+    fn popn(&mut self, amount: usize) -> () {
+        let len = self.len();
+        assert!(len >= amount);
+        self.truncate(len - amount);
+    }
+}
+
+impl<A> Truncateable for Vec<A> {
+    fn len(&self) -> usize { self.len() }
+
+    fn truncate(&mut self, amount: usize) -> () { self.truncate(amount) }
+}
