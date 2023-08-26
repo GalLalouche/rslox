@@ -472,9 +472,7 @@ impl FunctionFrame {
                 Left(OpCode::Call(c)) => {
                     self.consume(TokenType::CloseParen, None)?;
                     self.active_chunk().write(OpCode::Call(c), line);
-                    for _ in 0..c + 3 {
-                        self.active_chunk().write(OpCode::Pop, line);
-                    }
+                    self.active_chunk().write(OpCode::PopN(c+3), line);
                 }
                 _ => {
                     self.compile_precedence(next_precedence)?;
@@ -892,9 +890,7 @@ mod tests {
         expected.write(OpCode::Nil, 4);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
         expected.write(OpCode::Call(0), 4);
-        expected.write(OpCode::Pop, 4);
-        expected.write(OpCode::Pop, 4);
-        expected.write(OpCode::Pop, 4);
+        expected.write(OpCode::PopN(3), 4);
         expected.write(OpCode::Pop, 4);
         assert_deep_eq!(expected.get_code(), compiled.get_code());
     }
@@ -976,11 +972,7 @@ mod tests {
         expected.write(OpCode::GetGlobal(x.clone()), 7);
         expected.write(OpCode::GetGlobal(z.clone()), 7);
         expected.write(OpCode::Call(2), 7);
-        expected.write(OpCode::Pop, 7);
-        expected.write(OpCode::Pop, 7);
-        expected.write(OpCode::Pop, 7);
-        expected.write(OpCode::Pop, 7);
-        expected.write(OpCode::Pop, 7);
+        expected.write(OpCode::PopN(5), 7);
         expected.write(OpCode::Pop, 7);
         assert_deep_eq!(expected, compiled);
     }
@@ -1038,11 +1030,7 @@ mod tests {
         expected.write(OpCode::Number(10.0), 4);
         expected.write(OpCode::Number(20.0), 4);
         expected.write(OpCode::Call(2), 4);
-        expected.write(OpCode::Pop, 4);
-        expected.write(OpCode::Pop, 4);
-        expected.write(OpCode::Pop, 4);
-        expected.write(OpCode::Pop, 4);
-        expected.write(OpCode::Pop, 4);
+        expected.write(OpCode::PopN(5), 4);
         expected.write(OpCode::Print, 4);
         assert_deep_eq!(expected, compiled);
     }

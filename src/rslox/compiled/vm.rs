@@ -119,6 +119,7 @@ impl VirtualMachine {
 
             let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
                 OpCode::Number(num) => format!("{}", num),
+                OpCode::PopN(num) => format!("{}", num),
                 OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
@@ -195,12 +196,17 @@ impl CallFrame {
                 OpCode::Return => {
                     // Patch return value
                     let len = self.stack.borrow().len();
-                    let result_index = len - 1 - self.function.unwrap_upgrade().arity - 2;
+                    let result_index = len - self.function.unwrap_upgrade().arity - 3;
                     self.stack.borrow_mut().swap(result_index, len - 1);
                     self.ip = instructions.len() + 1;
                     return Ok(None);
                 }
                 OpCode::Pop => { stack.borrow_mut().pop().unwrap(); }
+                OpCode::PopN(n) => {
+                    let len = stack.borrow().len();
+                    assert!(len >= *n);
+                    stack.borrow_mut().truncate(len - *n);
+                }
                 OpCode::Print => {
                     let expr = stack.borrow_mut().pop().unwrap();
                     write!(writer, "{}", expr.stringify()).expect("Not written");

@@ -10,6 +10,8 @@ pub type ArgCount = usize;
 pub enum OpCode {
     Return,
     Pop,
+    // A more efficient variant of the above, used by function returns.
+    PopN(usize),
     Print,
     Function(ConstantIndex),
     DefineGlobal(InternedString),
@@ -62,6 +64,7 @@ impl OpCode {
         format!("{:15}", match self {
             OpCode::Return => "RETURN",
             OpCode::Pop => "POP",
+            OpCode::PopN(_) => "POP_N",
             OpCode::Print => "PRINT",
             OpCode::Function(_) => "FUNCTION",
             OpCode::DefineGlobal(_) => "DEFINE_GLOBAL",
