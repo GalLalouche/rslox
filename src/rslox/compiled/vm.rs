@@ -1017,4 +1017,46 @@ mod tests {
             "30",
         )
     }
+
+    #[test]
+    fn factorial_0() {
+        assert_eq!(
+            printed_string(vec![
+                "fun factorial(x) {",
+                "  if (x == 0) {return 1;}",
+                "  else {return x * factorial(x - 1);}",
+                "}",
+                "print factorial(0);",
+            ]),
+            "1",
+        )
+    }
+
+    #[test]
+    fn factorial_1() {
+        assert_eq!(
+            printed_string(vec![
+                "fun factorial(x) {",
+                "  if (x == 0) {return 1;}",
+                "  else {return x * factorial(x - 1);}",
+                "}",
+                "print factorial(1);",
+            ]),
+            "1",
+        )
+    }
+
+    #[test]
+    fn factorial_5() {
+        assert_eq!(
+            printed_string(vec![
+                "fun factorial(x) {",
+                "  if (x == 0) {return 1;}",
+                "  else {return x * factorial(x - 1);}",
+                "}",
+                "print factorial(5);",
+            ]),
+            "120",
+        )
+    }
 }
