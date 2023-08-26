@@ -44,9 +44,11 @@ impl Chunk {
     pub fn intern_string(&mut self, str: String) -> InternedString {
         GcWeak::from(self.interned_strings.get_or_insert(Rc::new(str)))
     }
-
     pub fn write(&mut self, op: OpCode, line: Line) -> CodeLocation {
         self.code.write(op, line)
+    }
+    pub fn swap_last_two_instructions(&mut self) -> () {
+        self.code.swap_last_two_instructions();
     }
     pub fn add_function(&mut self, function: Function, line: Line) -> CodeLocation {
         let index = self.functions.len();
@@ -55,6 +57,7 @@ impl Chunk {
     }
     pub fn get_mut(&mut self, i: usize) -> Option<&mut (OpCode, Line)> { self.code.get_mut(i) }
     pub fn remove(&mut self, i: usize) -> (OpCode, Line) { self.code.remove(i) }
+    pub fn pop(&mut self) -> (OpCode, Line) { self.code.pop() }
 
     pub fn get_code(&self) -> &Code { &self.code }
     pub fn get_interned_strings(&self) -> &InternedStrings { &self.interned_strings }

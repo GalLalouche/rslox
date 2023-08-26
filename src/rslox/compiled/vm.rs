@@ -93,6 +93,14 @@ impl VirtualMachine {
 
     fn unfinished(&self) -> bool { self.frames.last().unfinished() }
 
+    fn _debug_stack(&self) -> () {
+        let stack = &self.frames.first().stack;
+        eprintln!("stack:");
+        for (i, value) in stack.borrow().iter().enumerate() {
+            eprintln!("{:0>2}: {}", i, value.stringify())
+        }
+    }
+
     #[cfg(test)]
     fn _disassemble(chunk: &Chunk) -> Vec<String> {
         let mut previous_line: Line = 0;
@@ -184,7 +192,14 @@ impl CallFrame {
                 }}
             }
             match op {
-                OpCode::Return => (),
+                OpCode::Return => {
+                    // Patch return value
+                    let len = self.stack.borrow().len();
+                    let result_index = len - 1 - self.function.unwrap_upgrade().arity - 2;
+                    self.stack.borrow_mut().swap(result_index, len - 1);
+                    self.ip = instructions.len() + 1;
+                    return Ok(None);
+                }
                 OpCode::Pop => { stack.borrow_mut().pop().unwrap(); }
                 OpCode::Print => {
                     let expr = stack.borrow_mut().pop().unwrap();
@@ -387,17 +402,14 @@ mod tests {
     use super::*;
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
-        // Remove the final POP to ensure the stack isn't empty
         let mut compiled = unsafe_compile(lines);
+        // // Comment this in for debugging the compiled program.
+        // eprintln!("disassembled:\n{}", VirtualMachine::_disassemble(&compiled).join("\n"));
         let code = compiled.get_code();
-        assert!(match code.get(code.len() - 2).unwrap().0 {
-            OpCode::Pop => true,
-            _ => false
-        });
-        compiled.remove(code.len() - 2);
+        // Remove the final POP to ensure the stack isn't empty
+        assert_eq!(code.last().unwrap().0, OpCode::Pop);
+        compiled.pop();
         let stack = VirtualMachine::run(compiled, &mut sink()).unwrap();
-        // Last is return, which as an empty, because second from last is pop, which will also end
-        // with an empty stack.
         stack.unwrap_single().into()
     }
 
@@ -405,7 +417,7 @@ mod tests {
         let mut buff = Cursor::new(Vec::new());
         let chunk = unsafe_compile(lines);
         // // Comment this in for debugging the compiled program.
-        // eprintln!("disassembled:\n{}", VirtualMachine::_disassemble(chunk));
+        // eprintln!("disassembled:\n{}", VirtualMachine::_disassemble(&chunk).join("\n"));
         VirtualMachine::run(chunk, &mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
@@ -941,7 +953,7 @@ mod tests {
                 "  print y;",
                 "  print z;",
                 "}",
-                "a(1);"
+                "a(1);",
             ]),
             "23121201-1010",
         )
@@ -954,7 +966,7 @@ mod tests {
                 "fun a(x) {",
                 "  print x * x;",
                 "}",
-                "print a(16);"
+                "print a(16);",
             ]),
             "256nil",
         )
@@ -971,6 +983,32 @@ mod tests {
                 "print res;",
             ]),
             "256nil",
+        )
+    }
+
+    #[test]
+    fn basic_explicit_return() {
+        assert_eq!(
+            printed_string(vec![
+                "fun plus() {",
+                "  return 42;",
+                "}",
+                "print plus();",
+            ]),
+            "42",
+        )
+    }
+
+    #[test]
+    fn basic_explicit_return_with_args() {
+        assert_eq!(
+            printed_string(vec![
+                "fun plus(x, y) {",
+                "  return x + y;",
+                "}",
+                "print plus(10, 20);",
+            ]),
+            "30",
         )
     }
 }

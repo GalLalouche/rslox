@@ -18,11 +18,17 @@ impl Code {
     pub fn instructions(&self) -> &Vec<(OpCode, Line)> { &self.0 }
     pub fn current_location(&self) -> CodeLocation { self.len() - 1 }
     pub fn next_location(&self) -> CodeLocation { self.len() }
+    pub fn swap_last_two_instructions(&mut self) -> () {
+        let len = self.0.len();
+        assert!(len >= 2);
+        self.0.swap(len -1, len -2);
+    }
 
     pub fn len(&self) -> usize { self.0.len() }
     pub fn get(&self, i: usize) -> Option<&(OpCode, Line)> { self.0.get(i) }
     pub fn get_mut(&mut self, i: usize) -> Option<&mut (OpCode, Line)> { self.0.get_mut(i) }
     pub fn remove(&mut self, i: usize) -> (OpCode, Line) { self.0.remove(i) }
+    pub fn pop(&mut self) -> (OpCode, Line) { self.0.pop().unwrap() }
     pub fn iter(&self) -> Iter<'_, (OpCode, Line)> { self.0.iter() }
     pub fn last(&self) -> Option<&(OpCode, Line)> { self.0.last() }
 }
