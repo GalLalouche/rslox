@@ -1157,4 +1157,22 @@ mod tests {
             "55",
         )
     }
+
+    #[test]
+    fn functions_returning_functions_no_closure() {
+        assert_eq!(
+            printed_string(vec![
+                "fun f() {",
+                "  print \"f1\";",
+                "  fun g() {",
+                "    print \"g\";",
+                "  }",
+                "  print \"f2\";",
+                "  return g;",
+                "}",
+                "f()();",
+            ]),
+            "f1f2g",
+        )
+    }
 }
