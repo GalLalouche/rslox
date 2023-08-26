@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn fibonacci() {
         assert_eq!(
-            "8",
+            "55",
             printed_string(vec![
                 "fun fib(n) {",
                 "  if (n <= 1) {",
@@ -458,7 +458,7 @@ mod tests {
                 "  }",
                 "  return fib(n - 2) + fib(n - 1);",
                 "}",
-                "print fib(6);",
+                "print fib(10);",
             ]));
     }
 
