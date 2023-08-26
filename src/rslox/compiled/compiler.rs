@@ -79,9 +79,12 @@ impl FunctionFrame {
     }
 
     fn finish(mut self, line: Line) -> (Chunk, TokenPointer) {
-        if !self.active_chunk().get_code().last().iter().any(|e| e.0 == OpCode::Return) {
+        if self.active_chunk().get_code().last().iter().any(|e| match &e.0 {
+            OpCode::Return(_) => false,
+            _ => true,
+        }) {
             self.active_chunk().write(OpCode::Nil, line);
-            self.active_chunk().write(OpCode::Return, line);
+            self.make_return(line);
         }
         (self.chunk, self.current)
     }
@@ -102,6 +105,11 @@ impl FunctionFrame {
             self.chunk.write(OpCode::PopN(amount_to_drop), line);
             self.locals.truncate(amount_to_keep);
         }
+    }
+
+    fn make_return(&mut self, line: Line) {
+        let count = self.locals.len();
+        self.active_chunk().write(OpCode::Return(count), line);
     }
 
     fn synchronize(&mut self) {
@@ -182,35 +190,44 @@ impl FunctionFrame {
             self.compile_expression()?;
         }
         self.consume(TokenType::Semicolon, None)?;
-        self.chunk.write(OpCode::Return, line);
+        self.make_return(line);
         Ok(line)
     }
 
     fn block(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
+        let ending_line = self.multi_statements()?;
+        self.end_scope(ending_line);
+        Ok(ending_line)
+    }
+
+    fn multi_statements(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         self.begin_scope();
         let mut errors = Vec::new();
         while !self.is_at_end() && self.peek_type().deref() != &TokenType::CloseBrace {
             self.declaration(&mut errors);
         }
         let ending_line = self.consume(TokenType::CloseBrace, None).to_nonempty()?;
-        // Skip the semicolon
-        return match NonEmpty::from_vec(errors) {
-            None => {
-                self.end_scope(ending_line);
-                Ok(ending_line)
-            }
+        match NonEmpty::from_vec(errors) {
+            None => Ok(ending_line),
             Some(errs) => Err(errs),
-        };
+        }
     }
 
     fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
         self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
-        self.jumping_body(line, 1 as JumpOffset, OpCode::JumpIfFalse)?;
+        let jump_pos = self.jumping_body(line, 0 as JumpOffset, OpCode::JumpIfFalse)?;
         if let Some(line) = self.matches(TokenType::Else) {
             self.jumping_body(line, 0 as JumpOffset, OpCode::Jump)?;
-        }
+            // Since we added a Jump, we need to fix the JumpIfFalse target.
+            let current_jump = self.active_chunk().get_code().get(jump_pos).unwrap().0.clone();
+            (*self.active_chunk().get_mut(jump_pos).unwrap()).0 =
+                match current_jump {
+                    OpCode::JumpIfFalse(to) => OpCode::JumpIfFalse(to + 1),
+                    e => panic!("Expected JumpIfFalse, was {:?}", e)
+                };
+        } else {}
         Ok(line)
     }
 
@@ -279,19 +296,24 @@ impl FunctionFrame {
             OpCode::UnpatchedJump => true,
             _ => false,
         });
-        (*self.active_chunk().get_mut(source).unwrap()).0 =
-            ctor(self.active_chunk().get_code().next_location() + offset);
+        let next_location = self.active_chunk().get_code().next_location();
+        let result = if offset.is_negative() {
+            next_location - (offset.wrapping_abs() as usize)
+        } else {
+            next_location + offset as usize
+        };
+        (*self.active_chunk().get_mut(source).unwrap()).0 = ctor(result);
     }
 
     // If new elements are added after this function has finished running, the jump should be after
     // those.
     fn jumping_body<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, line: Line, offset: JumpOffset, ctor: F,
-    ) -> Result<(), NonEmpty<CompilerError>> {
+    ) -> Result<CodeLocation, NonEmpty<CompilerError>> {
         let jump_pos = self.active_chunk().write(OpCode::UnpatchedJump, line);
         self.statement()?;
         self.patch_jump(jump_pos, offset, ctor);
-        Ok(())
+        Ok(jump_pos)
     }
 
     fn declare_function(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
@@ -313,7 +335,9 @@ impl FunctionFrame {
         }
         frame.consume(TokenType::CloseParen, None).to_nonempty()?;
         frame.consume(TokenType::OpenBrace, None).to_nonempty()?;
-        let end_line = frame.block()?;
+        // Functions don't explicitly clean up after themselves; instead, each return statement
+        // knows how many elements to drop from the call stack.
+        let end_line = frame.multi_statements()?;
         let (chunk, new_current) = frame.finish(end_line);
         let function = Function { name: name.clone(), chunk, arity };
         self.current = new_current;
@@ -459,7 +483,7 @@ impl FunctionFrame {
             let Token { line, r#type } = self.advance();
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
-                TokenType::OpenParen => self.argument_list(line).map(|c| Left(OpCode::Call(c)))?,
+                TokenType::OpenParen => self.argument_list().map(|c| Left(OpCode::Call(c)))?,
                 TokenType::Minus => Left(OpCode::Subtract),
                 TokenType::Plus => Left(OpCode::Add),
                 TokenType::Slash => Left(OpCode::Divide),
@@ -476,7 +500,6 @@ impl FunctionFrame {
                 Left(OpCode::Call(c)) => {
                     self.consume(TokenType::CloseParen, None)?;
                     self.active_chunk().write(OpCode::Call(c), line);
-                    self.active_chunk().write(OpCode::PopN(c + 3), line);
                 }
                 _ => {
                     self.compile_precedence(next_precedence)?;
@@ -500,10 +523,8 @@ impl FunctionFrame {
         Ok(last_line)
     }
 
-    fn argument_list(&mut self, line: Line) -> Result<ArgCount, CompilerError> {
+    fn argument_list(&mut self) -> Result<ArgCount, CompilerError> {
         let mut arity = 0;
-        self.active_chunk().write(OpCode::Nil, line); // Make room for return value.
-        self.active_chunk().swap_last_two_instructions();
         if self.peek_type().deref() != &TokenType::CloseParen {
             loop {
                 self.compile_expression()?;
@@ -634,7 +655,7 @@ impl From<&TokenType> for Precedence {
 }
 
 type CanAssign = bool;
-type JumpOffset = usize;
+type JumpOffset = i8;
 
 #[cfg(test)]
 mod tests {
@@ -818,6 +839,44 @@ mod tests {
         )
     }
 
+    #[test]
+    fn patched_if() {
+        let compiled = unsafe_compile(vec![
+            "if (false) {",
+            "  print \"wtf\";",
+            "}",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let s = expected.intern_string("wtf".to_owned());
+        expected.write(OpCode::Bool(false), 1);
+        expected.write(OpCode::JumpIfFalse(4), 1);
+        expected.write(OpCode::String(s), 2);
+        expected.write(OpCode::Print, 2);
+        assert_deep_eq!(expected, compiled)
+    }
+
+    #[test]
+    fn patched_if_else() {
+        let compiled = unsafe_compile(vec![
+            "if (false) {",
+            "  print \"wtf\";",
+            "} else {",
+            "  print \"ok\";",
+            "}",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let s1 = expected.intern_string("wtf".to_owned());
+        let s2 = expected.intern_string("ok".to_owned());
+        expected.write(OpCode::Bool(false), 1);
+        expected.write(OpCode::JumpIfFalse(5), 1);
+        expected.write(OpCode::String(s1), 2);
+        expected.write(OpCode::Print, 2);
+        expected.write(OpCode::Jump(7), 3);
+        expected.write(OpCode::String(s2), 4);
+        expected.write(OpCode::Print, 4);
+        assert_deep_eq!(expected, compiled)
+    }
+
     // TODO No condition tests will just result in an infinite loop until return inside functions is implemented.
     #[test]
     fn define_and_print_function() {
@@ -834,7 +893,7 @@ mod tests {
         function_chunk.write(OpCode::String(w2), 2);
         function_chunk.write(OpCode::Print, 2);
         function_chunk.write(OpCode::Nil, 3);
-        function_chunk.write(OpCode::Return, 3);
+        function_chunk.write(OpCode::Return(0), 3);
         expected.add_function(Function {
             name: f.clone(),
             arity: 0,
@@ -866,9 +925,8 @@ mod tests {
         function_chunk.write(OpCode::GetLocal(1), 4);
         function_chunk.write(OpCode::Add, 4);
         function_chunk.write(OpCode::Print, 4);
-        function_chunk.write(OpCode::PopN(2), 5);
         function_chunk.write(OpCode::Nil, 5);
-        function_chunk.write(OpCode::Return, 5);
+        function_chunk.write(OpCode::Return(2), 5);
         expected.add_function(Function {
             name: f.clone(),
             arity: 0,
@@ -890,10 +948,8 @@ mod tests {
         let f = expected.intern_string("areWeHavingItYet".to_owned());
         expected.write(OpCode::Function(0), 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        expected.write(OpCode::Nil, 4);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
         expected.write(OpCode::Call(0), 4);
-        expected.write(OpCode::PopN(3), 4);
         expected.write(OpCode::Pop, 4);
         assert_deep_eq!(expected.get_code(), compiled.get_code());
     }
@@ -919,9 +975,8 @@ mod tests {
         function_chunk.write(OpCode::GetLocal(2), 3);
         function_chunk.write(OpCode::Add, 3);
         function_chunk.write(OpCode::Print, 3);
-        function_chunk.write(OpCode::Pop, 4);
         function_chunk.write(OpCode::Nil, 4);
-        function_chunk.write(OpCode::Return, 4);
+        function_chunk.write(OpCode::Return(3), 4);
         expected.add_function(Function {
             name: f.clone(),
             arity: 2,
@@ -955,9 +1010,8 @@ mod tests {
         function_chunk.write(OpCode::GetLocal(2), 3);
         function_chunk.write(OpCode::Add, 3);
         function_chunk.write(OpCode::Print, 3);
-        function_chunk.write(OpCode::Pop, 4);
         function_chunk.write(OpCode::Nil, 4);
-        function_chunk.write(OpCode::Return, 4);
+        function_chunk.write(OpCode::Return(3), 4);
         expected.add_function(Function {
             name: f.clone(),
             arity: 2,
@@ -970,12 +1024,10 @@ mod tests {
         expected.write(OpCode::Number(12.0), 6);
         let z = expected.intern_string("z".to_owned());
         expected.write(OpCode::DefineGlobal(z.clone()), 6);
-        expected.write(OpCode::Nil, 7);
         expected.write(OpCode::GetGlobal(f.clone()), 7);
         expected.write(OpCode::GetGlobal(x.clone()), 7);
         expected.write(OpCode::GetGlobal(z.clone()), 7);
         expected.write(OpCode::Call(2), 7);
-        expected.write(OpCode::PopN(5), 7);
         expected.write(OpCode::Pop, 7);
         assert_deep_eq!(expected, compiled);
     }
@@ -994,7 +1046,7 @@ mod tests {
         function_chunk.write(OpCode::String(w2), 2);
         function_chunk.write(OpCode::Print, 2);
         function_chunk.write(OpCode::Nil, 3);
-        function_chunk.write(OpCode::Return, 3);
+        function_chunk.write(OpCode::Return(0), 3);
         expected.add_function(Function {
             name: f.clone(),
             arity: 0,
@@ -1021,20 +1073,50 @@ mod tests {
         function_chunk.write(OpCode::GetLocal(0), 2);
         function_chunk.write(OpCode::GetLocal(1), 2);
         function_chunk.write(OpCode::Add, 2);
-        function_chunk.write(OpCode::Return, 2);
+        function_chunk.write(OpCode::Return(2), 2);
         expected.add_function(Function {
             name: f.clone(),
             arity: 2,
             chunk: function_chunk,
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        expected.write(OpCode::Nil, 4);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
         expected.write(OpCode::Number(10.0), 4);
         expected.write(OpCode::Number(20.0), 4);
         expected.write(OpCode::Call(2), 4);
-        expected.write(OpCode::PopN(5), 4);
         expected.write(OpCode::Print, 4);
+        assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn return_inside_if() {
+        let compiled = unsafe_compile(vec![
+            "fun foo(x) {",
+            "  if (x > 0) {",
+            "    return 1;",
+            "  }",
+            "  return 2;",
+            "}",
+        ]);
+
+        let mut expected: Chunk = Default::default();
+        let f = expected.intern_string("foo".to_owned());
+        let mut function_chunk: Chunk = Default::default();
+        function_chunk.intern_string("x".to_owned());
+        function_chunk.write(OpCode::GetLocal(0), 2);
+        function_chunk.write(OpCode::Number(0.0), 2);
+        function_chunk.write(OpCode::Greater, 2);
+        function_chunk.write(OpCode::JumpIfFalse(6), 2);
+        function_chunk.write(OpCode::Number(1.0), 3);
+        function_chunk.write(OpCode::Return(1), 3);
+        function_chunk.write(OpCode::Number(2.0), 5);
+        function_chunk.write(OpCode::Return(1), 5);
+        expected.add_function(Function {
+            name: f.clone(),
+            arity: 1,
+            chunk: function_chunk,
+        }, 1);
+        expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
 }

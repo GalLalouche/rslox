@@ -8,6 +8,7 @@ use std::rc::Rc;
 
 use nonempty::NonEmpty;
 
+use crate::rslox::common::utils::Truncateable;
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::GcWeak;
@@ -75,18 +76,16 @@ impl VirtualMachine {
 
     fn go(&mut self, writer: &mut impl Write) -> Result<(), VmError> {
         if self.frames.len() > MAX_FRAMES {
-            let line = self.frames.last().current_line();
+            let active_frame = self.frames.last();
+            let line = active_frame.current_line();
             return Err(VmError::new(
                 "Stack overflow! Wheeeee!".to_owned(),
-                self.frames.last().function.unwrap_upgrade().name.to_owned(),
+                active_frame.function.unwrap_upgrade().name.to_owned(),
                 line,
             ));
         }
         self.frames.last_mut().run(writer).map(|maybe_cf| match maybe_cf {
-            None => {
-                let last_value = self.frames.pop().map(|e| e.stack.borrow().last().cloned().unwrap());
-                last_value.iter().for_each(|v| self.frames.last().stack.borrow_mut().push(v.clone()));
-            }
+            None => { self.frames.pop(); },
             Some(cf) => self.frames.push(cf),
         })
     }
@@ -94,11 +93,7 @@ impl VirtualMachine {
     fn unfinished(&self) -> bool { self.frames.last().unfinished() }
 
     fn _debug_stack(&self) -> () {
-        let stack = &self.frames.first().stack;
-        eprintln!("stack:");
-        for (i, value) in stack.borrow().iter().enumerate() {
-            eprintln!("{:0>2}: {}", i, value.stringify())
-        }
+        self.frames.first()._debug_stack();
     }
 
     #[cfg(test)]
@@ -118,9 +113,11 @@ impl VirtualMachine {
             );
 
             let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
+                OpCode::Return(num) => format!("{}", num),
                 OpCode::Number(num) => format!("{}", num),
                 OpCode::PopN(num) => format!("{}", num),
-                OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
+                OpCode::UnpatchedJump =>
+                    panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
                 OpCode::Function(i) => format!("{}", i),
@@ -133,9 +130,10 @@ impl VirtualMachine {
                 OpCode::Bool(bool) => format!("{}", bool),
                 OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
                 OpCode::Call(arg_count) => format!("'{}'", arg_count),
-                OpCode::Return | OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals |
                 OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
-                OpCode::Divide | OpCode::Negate | OpCode::Not => "".to_owned(),
+                OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
+                OpCode::Negate | OpCode::Not =>
+                    "".to_owned(),
             });
             result.push(command);
             previous_line = *line;
@@ -193,11 +191,20 @@ impl CallFrame {
                 }}
             }
             match op {
-                OpCode::Return => {
+                OpCode::Return(n) => {
                     // Patch return value
                     let len = self.stack.borrow().len();
-                    let result_index = len - self.function.unwrap_upgrade().arity - 3;
+                    let amount_to_pop = *n + 1;
+                    assert!(amount_to_pop < len, "amount_to_pop: {}, len: {}", amount_to_pop, len);
+                    let result_index = len - 1 - amount_to_pop;
+                    assert!(
+                        self.stack.borrow()[result_index].is_function(),
+                        "Patched index @{} should have been function, was {:?}",
+                        result_index,
+                        self.stack.borrow()[result_index],
+                    );
                     self.stack.borrow_mut().swap(result_index, len - 1);
+                    self.stack.borrow_mut().popn(amount_to_pop);
                     self.ip = instructions.len() + 1;
                     return Ok(None);
                 }
@@ -205,7 +212,7 @@ impl CallFrame {
                 OpCode::PopN(n) => {
                     let len = stack.borrow().len();
                     assert!(len >= *n);
-                    stack.borrow_mut().truncate(len - *n);
+                    stack.borrow_mut().popn(*n);
                 }
                 OpCode::Print => {
                     let expr = stack.borrow_mut().pop().unwrap();
@@ -351,6 +358,14 @@ impl CallFrame {
         line: &Line,
     ) -> Result<&'a mut f64, VmError> {
         value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), *line))
+    }
+
+    fn _debug_stack(&self) -> () {
+        let stack = &self.stack;
+        eprintln!("stack for {}:", self.function.unwrap_upgrade().name.unwrap_upgrade());
+        for (i, value) in stack.borrow().iter().enumerate() {
+            eprintln!("{:0>2}: {}", i, value.stringify())
+        }
     }
 }
 
@@ -730,6 +745,40 @@ mod tests {
     }
 
     #[test]
+    fn multi_line_if() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "if (x) {",
+                "  y = 42;",
+                "  z = x + y;",
+                "  print z * 3;",
+                "}",
+                "z = 15;",
+                "print z * x;",
+            ]),
+            "13230",
+        )
+    }
+
+    #[test]
+    fn multi_line_if_false() {
+        assert_eq!(
+            printed_string(vec![
+                "var x = 2;",
+                "if (x < 0) {",
+                "  y = 42;",
+                "  z = x + y;",
+                "  print z * 3;",
+                "}",
+                "z = 15;",
+                "print z * x;",
+            ]),
+            "30",
+        )
+    }
+
+    #[test]
     fn if_false_else() {
         assert_eq!(
             printed_string(vec![
@@ -890,8 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn user_error_on_not_enough_arguments() {
-        assert_eq!(
+    fn user_error_on_not_enough_arguments() { assert_eq!(
             single_error(
                 vec![
                     "fun areWeHavingItYet(x, y) {",
@@ -943,7 +991,26 @@ mod tests {
     }
 
     #[test]
-    fn functions_calling_functions_calling_functions() {
+    fn manual_factorial() {
+        assert_eq!(
+            printed_string(vec![
+                "fun a(x) {",
+                "  return x * b(x - 1);",
+                "}",
+                "fun b(x) {",
+                "  return x * c(x - 1);",
+                "}",
+                "fun c(x) {",
+                "  return 1;",
+                "}",
+                "print a(2);",
+            ]),
+            "2",
+        )
+    }
+
+    #[test]
+    fn functions_calling_functions_calling_functions_hard() {
         assert_eq!(
             printed_string(vec![
                 "fun a(x) {",
@@ -1053,6 +1120,22 @@ mod tests {
                 "fun factorial(x) {",
                 "  if (x == 0) {return 1;}",
                 "  else {return x * factorial(x - 1);}",
+                "}",
+                "print factorial(5);",
+            ]),
+            "120",
+        )
+    }
+
+    #[test]
+    fn factorial_5_early_exit() {
+        assert_eq!(
+            printed_string(vec![
+                "fun factorial(x) {",
+                "  if (x == 0) {",
+                "    return 1;",
+                "  }",
+                "  return x * factorial(x - 1);",
                 "}",
                 "print factorial(5);",
             ]),

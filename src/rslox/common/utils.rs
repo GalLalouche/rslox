@@ -42,7 +42,7 @@ pub fn debug_mk_string<'a, A: Debug + 'a, I>(i: &'a I) -> String
 }
 
 
-trait Truncateable {
+pub trait Truncateable {
     fn len(&self) -> usize;
     fn truncate(&mut self, amount: usize) -> ();
     fn popn(&mut self, amount: usize) -> () {

@@ -52,9 +52,9 @@ impl Value {
             _ => false,
         }
     }
-    pub fn is_nil(&self) -> bool {
+    pub fn is_function(&self) -> bool {
         match &self {
-            Value::Nil => true,
+            Value::Function(_) => true,
             _ => false,
         }
     }
