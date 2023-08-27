@@ -11,8 +11,8 @@ use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonE
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
-use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode};
-use crate::rslox::compiled::value::Function;
+use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
+use crate::rslox::compiled::value::{Function, UpValue};
 
 type CompilerError = ParserError;
 
@@ -21,6 +21,7 @@ pub fn compile(lexems: Vec<Token>) -> LoxResult<Chunk> {
 }
 
 type Depth = i64;
+type IsLocal = bool;
 
 const UNINITIALIZED: Depth = -1;
 
@@ -40,7 +41,7 @@ impl Compiler {
         let mut current = 0;
         let tokens_rc = Rc::new(RefCell::new(self.tokens));
         while current != tokens_rc.borrow().len() {
-            let frame = FunctionFrame::new(tokens_rc.clone(), current);
+            let frame = FunctionFrame::top_level(tokens_rc.clone(), current);
             let (chunk, new_current) = frame.compile()?;
             current = new_current;
             last_chunk = chunk;
@@ -51,19 +52,41 @@ impl Compiler {
 
 type TokenPointer = usize;
 
-#[derive(Debug, Default)]
-struct FunctionFrame {
+#[derive(Debug)]
+struct FunctionFrame<'a> {
     locals: Vec<(InternedString, Depth)>,
     depth: Depth,
     chunk: Chunk,
+    enclosing: Option<&'a FunctionFrame<'a>>,
+    upvalues: Vec<UpValue>,
 
     tokens: Rc<RefCell<Vec<Token>>>,
     current: TokenPointer,
 }
 
-impl FunctionFrame {
-    pub fn new(tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer) -> Self {
-        FunctionFrame { tokens, current, ..Default::default() }
+impl<'a> FunctionFrame<'a> {
+    pub fn top_level(tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer) -> Self {
+        FunctionFrame::new(tokens, current, None)
+    }
+    pub fn internal(
+        tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer, enclosing: &'a FunctionFrame) -> Self {
+        FunctionFrame::new(tokens, current, Some(enclosing))
+    }
+
+    fn new(
+        tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer, enclosing: Option<&'a FunctionFrame>,
+    ) -> Self {
+        FunctionFrame {
+            locals: Default::default(),
+            chunk: Default::default(),
+            upvalues: Default::default(),
+
+            depth: 0,
+
+            enclosing,
+            tokens,
+            current,
+        }
     }
     pub fn compile(mut self) -> Result<(Chunk, TokenPointer), NonEmpty<CompilerError>> {
         let mut errors = Vec::new();
@@ -78,7 +101,7 @@ impl FunctionFrame {
         }
     }
 
-    fn finish(mut self, line: Line) -> (Chunk, TokenPointer) {
+    fn finish(mut self, line: Line) -> (Chunk, TokenPointer, Vec<UpValue>) {
         if self.active_chunk().get_code().last().iter().any(|e| match &e.0 {
             OpCode::Return(_) => false,
             _ => true,
@@ -86,7 +109,7 @@ impl FunctionFrame {
             self.active_chunk().write(OpCode::Nil, line);
             self.make_return(line);
         }
-        (self.chunk, self.current)
+        (self.chunk, self.current, self.upvalues)
     }
 
     fn begin_scope(&mut self) {
@@ -320,7 +343,7 @@ impl FunctionFrame {
         let (name, line) = self.parse_variable().to_nonempty()?;
         self.mark_initialized();
         self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        let mut frame = FunctionFrame::new(self.tokens.clone(), self.current);
+        let mut frame = FunctionFrame::internal(self.tokens.clone(), self.current, self);
         frame.depth += 1;
         let mut arity = 0;
         if frame.peek_type().deref() != &TokenType::CloseParen {
@@ -338,8 +361,8 @@ impl FunctionFrame {
         // Functions don't explicitly clean up after themselves; instead, each return statement
         // knows how many elements to drop from the call stack.
         let end_line = frame.multi_statements()?;
-        let (chunk, new_current) = frame.finish(end_line);
-        let function = Function { name: name.clone(), chunk, arity };
+        let (chunk, new_current, up_values) = frame.finish(end_line);
+        let function = Function { name: name.clone(), chunk, arity, upvalues: Default::default() };
         self.current = new_current;
         self.chunk.add_function(function, line);
         self.define_variable(name.clone(), line).to_nonempty()?;
@@ -438,25 +461,22 @@ impl FunctionFrame {
             }
             TokenType::Identifier(name) => {
                 let is_assignment = can_assign && self.matches(TokenType::Equal).is_some();
-                let interned_name = self.chunk.intern_string(name);
-                match self.resolve_local(&interned_name, &line)? {
-                    Some(index) => {
-                        if is_assignment {
-                            self.compile_expression()?;
-                            self.active_chunk().write(OpCode::SetLocal(index), line);
-                        } else {
-                            self.active_chunk().write(OpCode::GetLocal(index), line);
-                        }
-                    }
-                    None => {
-                        if is_assignment {
-                            self.compile_expression()?;
-                            self.active_chunk().write(OpCode::SetGlobal(interned_name), line);
-                        } else {
-                            self.active_chunk().write(OpCode::GetGlobal(interned_name), line);
-                        }
-                    }
-                };
+                let iname = self.chunk.intern_string(name);
+                let (setter, getter) =
+                    if let Some(index) = self.resolve_local(&iname, line)? {
+                        (OpCode::SetLocal(index), OpCode::GetLocal(index))
+                    } else if let Some(index) = self.resolve_upvalue(&iname, line)? {
+                        self.add_upvalue(index, true as IsLocal);
+                        (OpCode::SetUpvalue(index), OpCode::GetUpvalue(index))
+                    } else {
+                        (OpCode::SetGlobal(iname.clone()), OpCode::GetGlobal(iname))
+                    };
+                if is_assignment {
+                    self.compile_expression()?;
+                    self.active_chunk().write(setter, line);
+                } else {
+                    self.active_chunk().write(getter, line);
+                }
             }
             TokenType::StringLiteral(str) => {
                 let interned = self.chunk.intern_string(str);
@@ -523,6 +543,10 @@ impl FunctionFrame {
         Ok(last_line)
     }
 
+    fn add_upvalue(&mut self, index: StackLocation, is_local: IsLocal) {
+        self.upvalues.push(UpValue { index, is_local })
+    }
+
     fn argument_list(&mut self) -> Result<ArgCount, CompilerError> {
         let mut arity = 0;
         if self.peek_type().deref() != &TokenType::CloseParen {
@@ -541,13 +565,14 @@ impl FunctionFrame {
         &mut self.chunk
     }
 
-    fn resolve_local(&self, name: &InternedString, line: &Line) -> Result<Option<usize>, CompilerError> {
+    fn resolve_local(
+        &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
         for (i, (local_name, depth)) in self.locals.iter().enumerate() {
             if depth == &UNINITIALIZED {
                 return Err(CompilerError::new(
                     format!(
                         "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
-                    Token::new(*line, TokenType::identifier(name.to_owned())),
+                    Token::new(line, TokenType::identifier(name.to_owned())),
                 ));
             }
             if name == local_name {
@@ -555,6 +580,14 @@ impl FunctionFrame {
             }
         }
         return Ok(None);
+    }
+
+    fn resolve_upvalue(
+        &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
+        match self.enclosing {
+            None => Ok(None),
+            Some(cf) => cf.resolve_local(&name, line)
+        }
     }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<Line, CompilerError> {
@@ -898,6 +931,7 @@ mod tests {
             name: f.clone(),
             arity: 0,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
@@ -931,6 +965,7 @@ mod tests {
             name: f.clone(),
             arity: 0,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
@@ -981,6 +1016,7 @@ mod tests {
             name: f.clone(),
             arity: 2,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
@@ -1016,6 +1052,7 @@ mod tests {
             name: f.clone(),
             arity: 2,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::Number(52.0), 5);
@@ -1051,6 +1088,7 @@ mod tests {
             name: f.clone(),
             arity: 0,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
@@ -1078,6 +1116,7 @@ mod tests {
             name: f.clone(),
             arity: 2,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
@@ -1115,6 +1154,7 @@ mod tests {
             name: f.clone(),
             arity: 1,
             chunk: function_chunk,
+            upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);

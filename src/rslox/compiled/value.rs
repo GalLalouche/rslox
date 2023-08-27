@@ -1,9 +1,11 @@
 use std::borrow::BorrowMut;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::ops::Deref;
 
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
 
 #[derive(Debug, Clone)]
@@ -12,7 +14,7 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Function(GcWeak<Function>),
+    Closure(GcWeak<Function>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -20,6 +22,13 @@ pub struct Function {
     pub name: InternedString,
     pub arity: usize,
     pub chunk: Chunk,
+    pub upvalues: HashSet<UpValue>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+pub struct UpValue {
+    pub index: StackLocation,
+    pub is_local: bool,
 }
 
 impl Function {
@@ -54,7 +63,7 @@ impl Value {
     }
     pub fn is_function(&self) -> bool {
         match &self {
-            Value::Function(_) => true,
+            Value::Closure(_) => true,
             _ => false,
         }
     }
@@ -65,7 +74,7 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
-            Value::Function(f) => f.unwrap_upgrade().stringify(),
+            Value::Closure(f) => f.unwrap_upgrade().stringify(),
         }
     }
     pub fn is_truthy(&self) -> bool {

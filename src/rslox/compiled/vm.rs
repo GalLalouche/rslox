@@ -47,6 +47,7 @@ impl VirtualMachine {
             name: GcWeak::from(&name),
             arity: 0,
             chunk,
+            upvalues: Default::default(),
         });
         let stack: Rc<RefCell<Vec<Value>>> = Default::default();
         let globals: Rc<RefCell<HashMap<String, Value>>> = Default::default();
@@ -121,9 +122,11 @@ impl VirtualMachine {
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
                 OpCode::Function(i) => format!("{}", i),
-                OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
                 OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+                OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
                 OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+                OpCode::GetUpvalue(index) => format!("'{}'", index),
+                OpCode::SetUpvalue(index) => format!("'{}'", index),
                 OpCode::DefineLocal(index) => format!("{}", index),
                 OpCode::GetLocal(index) => format!("{}", index),
                 OpCode::SetLocal(index) => format!("{}", index),
@@ -220,7 +223,7 @@ impl CallFrame {
                 }
                 OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
                 OpCode::Function(i) =>
-                    stack.borrow_mut().push(Value::Function(chunk.get_function(*i))),
+                    stack.borrow_mut().push(Value::Closure(chunk.get_function(*i))),
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
@@ -247,6 +250,8 @@ impl CallFrame {
                     let value = stack.borrow().last().cloned().unwrap();
                     globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
                 }
+                OpCode::GetUpvalue(index) => panic!(),
+                OpCode::SetUpvalue(index) => panic!(),
                 OpCode::DefineLocal(index) =>
                     (*stack.borrow_mut().get_mut(*index).unwrap()) =
                         stack.borrow().last().unwrap().clone(),
@@ -285,7 +290,7 @@ impl CallFrame {
                     let func_index = stack.borrow().len() - arg_count - 1;
                     let func = stack.borrow().get(func_index).cloned().unwrap();
                     return match func {
-                        Value::Function(f) => {
+                        Value::Closure(f) => {
                             let arity = f.unwrap_upgrade().arity;
                             if arity != *arg_count {
                                 return Err(self.err(
@@ -387,7 +392,7 @@ impl From<&Value> for TracedValue {
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
             Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
-            Value::Function(f_) => {
+            Value::Closure(f_) => {
                 let f = f_.unwrap_upgrade();
                 TracedValue::Function {
                     name: f.name.to_owned(),
@@ -1144,15 +1149,14 @@ mod tests {
     }
 
     #[test]
-    fn fib_5() {
+    fn fib() {
         assert_eq!(
             printed_string(vec![
                 "fun fib(x) {",
-                "  if (x == 0) {return 0;}",
-                "  else if (x == 1) {return 1;}",
-                "  else {return fib(x - 1) + fib(x - 2);}",
+                "  if (x < 2) {return x;}",
+                "  return fib(x - 1) + fib(x - 2);",
                 "}",
-                "print fib(10);",
+                "print fib(30);",
             ]),
             "55",
         )
