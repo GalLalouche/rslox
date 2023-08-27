@@ -1,4 +1,5 @@
 use std::cell::{Ref, RefCell};
+use std::collections::HashSet;
 use std::mem;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -16,39 +17,14 @@ use crate::rslox::compiled::value::{Function, UpValue};
 
 type CompilerError = ParserError;
 
-pub fn compile(lexems: Vec<Token>) -> LoxResult<Chunk> {
-    convert_errors(Compiler::new(lexems).compile())
+pub fn compile(tokens: Vec<Token>) -> LoxResult<Chunk> {
+    convert_errors(FunctionFrame::top_level(Rc::new(RefCell::new(tokens)).clone(), 0).compile())
 }
 
 type Depth = i64;
 type IsLocal = bool;
 
 const UNINITIALIZED: Depth = -1;
-
-#[derive(Debug, Default)]
-struct Compiler {
-    tokens: Vec<Token>,
-}
-
-
-impl Compiler {
-    pub fn new(lexems: Vec<Token>) -> Self {
-        Compiler { tokens: lexems, ..Default::default() }
-    }
-
-    pub fn compile(self) -> Result<Chunk, NonEmpty<CompilerError>> {
-        let mut last_chunk = Chunk::default();
-        let mut current = 0;
-        let tokens_rc = Rc::new(RefCell::new(self.tokens));
-        while current != tokens_rc.borrow().len() {
-            let frame = FunctionFrame::top_level(tokens_rc.clone(), current);
-            let (chunk, new_current) = frame.compile()?;
-            current = new_current;
-            last_chunk = chunk;
-        }
-        Ok(last_chunk)
-    }
-}
 
 type TokenPointer = usize;
 
@@ -58,7 +34,7 @@ struct FunctionFrame<'a> {
     depth: Depth,
     chunk: Chunk,
     enclosing: Option<&'a FunctionFrame<'a>>,
-    upvalues: Vec<UpValue>,
+    upvalues: HashSet<UpValue>,
 
     tokens: Rc<RefCell<Vec<Token>>>,
     current: TokenPointer,
@@ -88,20 +64,18 @@ impl<'a> FunctionFrame<'a> {
             current,
         }
     }
-    pub fn compile(mut self) -> Result<(Chunk, TokenPointer), NonEmpty<CompilerError>> {
+    pub fn compile(mut self) -> Result<Chunk, NonEmpty<CompilerError>> {
         let mut errors = Vec::new();
         while !self.is_at_end() {
             self.declaration(&mut errors);
         }
         match NonEmpty::from_vec(errors) {
-            None => {
-                Ok((self.chunk, self.current))
-            }
+            None => Ok(self.chunk),
             Some(errs) => Err(errs),
         }
     }
 
-    fn finish(mut self, line: Line) -> (Chunk, TokenPointer, Vec<UpValue>) {
+    fn finish(mut self, line: Line) -> (Chunk, TokenPointer, HashSet<UpValue>) {
         if self.active_chunk().get_code().last().iter().any(|e| match &e.0 {
             OpCode::Return(_) => false,
             _ => true,
@@ -361,8 +335,8 @@ impl<'a> FunctionFrame<'a> {
         // Functions don't explicitly clean up after themselves; instead, each return statement
         // knows how many elements to drop from the call stack.
         let end_line = frame.multi_statements()?;
-        let (chunk, new_current, up_values) = frame.finish(end_line);
-        let function = Function { name: name.clone(), chunk, arity, upvalues: Default::default() };
+        let (chunk, new_current, upvalues) = frame.finish(end_line);
+        let function = Function { name: name.clone(), chunk, arity, upvalues };
         self.current = new_current;
         self.chunk.add_function(function, line);
         self.define_variable(name.clone(), line).to_nonempty()?;
@@ -544,7 +518,7 @@ impl<'a> FunctionFrame<'a> {
     }
 
     fn add_upvalue(&mut self, index: StackLocation, is_local: IsLocal) {
-        self.upvalues.push(UpValue { index, is_local })
+        self.upvalues.insert(UpValue { index, is_local });
     }
 
     fn argument_list(&mut self) -> Result<ArgCount, CompilerError> {
