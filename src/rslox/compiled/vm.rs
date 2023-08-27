@@ -1,5 +1,4 @@
 use std::borrow::ToOwned;
-use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::Write;
@@ -8,7 +7,7 @@ use std::rc::Rc;
 
 use nonempty::NonEmpty;
 
-use crate::rslox::common::utils::Truncateable;
+use crate::rslox::common::utils::{Truncateable, RcRc};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::GcWeak;
@@ -48,8 +47,8 @@ impl VirtualMachine {
             arity: 0,
             chunk,
         });
-        let stack: Rc<RefCell<Vec<Value>>> = Default::default();
-        let globals: Rc<RefCell<HashMap<String, Value>>> = Default::default();
+        let stack: RcRc<Vec<Value>> = Default::default();
+        let globals: RcRc<HashMap<String, Value>> = Default::default();
         let top_frame = CallFrame {
             ip: 0,
             function: GcWeak::from(&script),
@@ -103,8 +102,8 @@ type InstructionPointer = usize;
 struct CallFrame {
     ip: InstructionPointer,
     function: GcWeak<Function>,
-    stack: Rc<RefCell<Vec<Value>>>,
-    globals: Rc<RefCell<HashMap<String, Value>>>,
+    stack: RcRc<Vec<Value>>,
+    globals: RcRc<HashMap<String, Value>>,
     stack_index: usize,
 }
 
