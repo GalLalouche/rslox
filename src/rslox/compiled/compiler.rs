@@ -102,6 +102,7 @@ impl<'a> FunctionFrame<'a> {
             self.chunk.write(OpCode::PopN(amount_to_drop), line);
             self.locals.truncate(amount_to_keep);
         }
+        self.depth -= 1;
     }
 
     fn make_return(&mut self, line: Line) {
@@ -810,6 +811,23 @@ mod tests {
             ])).unwrap_err().unwrap_single().get_message(),
             "Redefined variable 'a' in same scope"
         )
+    }
+
+    #[test]
+    fn depth_is_reduced() {
+        let compiled = unsafe_compile(vec![
+            "{",
+            "}",
+            "var x = 42;",
+            "print x;",
+        ]);
+        let mut expected: Chunk = Default::default();
+        let x = expected.intern_string("x".to_owned());
+        expected.write(OpCode::Number(42.0), 3);
+        expected.write(OpCode::DefineGlobal(x.clone()), 3);
+        expected.write(OpCode::GetGlobal(x), 4);
+        expected.write(OpCode::Print, 4);
+        assert_deep_eq!(expected, compiled)
     }
 
     #[test]
