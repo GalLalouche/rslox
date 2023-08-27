@@ -699,7 +699,7 @@ type CanAssign = bool;
 type JumpOffset = i8;
 
 #[cfg(test)]
-fn disassemble(chunk: &Chunk) -> Vec<String> {
+pub fn disassemble(chunk: &Chunk) -> Vec<String> {
     let mut previous_line: Line = 0;
     let mut is_first = true;
     let mut result = Vec::new();
@@ -723,7 +723,12 @@ fn disassemble(chunk: &Chunk) -> Vec<String> {
             OpCode::JumpIfFalse(index) => format!("{}", index),
             OpCode::Jump(index) => format!("{}", index),
             OpCode::Function(i) => format!("{}", i),
-            OpCode::Upvalues(upvalues) => format!("{:?}", upvalues),
+            OpCode::Upvalues(upvalues) => format!(
+                "[{}]",
+                upvalues.iter()
+                    .map(|e| format!("({},{})", e.index, if e.is_local { "t" } else { "f" }))
+                    .collect::<Vec<_>>().join(",")
+            ),
             OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
             OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
             OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
@@ -746,96 +751,96 @@ fn disassemble(chunk: &Chunk) -> Vec<String> {
     }
     for i in 0..chunk.function_count() {
         let function = chunk.get_function(i);
-        // result.push(format!("fun {}",function.unwrap_upgrade().name.unwrap_upgrade().deref()":")
+        let name = function.unwrap_upgrade().name.unwrap_upgrade();
+        result.push(format!("<fun {}>", name));
         result.append(&mut disassemble(&function.unwrap_upgrade().chunk));
-        result.push(function.unwrap_upgrade().name.to_owned() + " <end>");
+        result.push(format!("<end {}>", name));
     }
     result
 }
 
-#[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
     use std::ops::Deref;
-    use std::rc::Rc;
 
-    use crate::{assert_deep_eq, assert_msg_contains};
+    use lazy_static::lazy_static;
+    use regex::Regex;
+
+    use crate::assert_msg_contains;
     use crate::rslox::common::tests::unsafe_tokenize;
     use crate::rslox::common::utils::SliceExt;
-    use crate::rslox::compiled::code::Code;
     use crate::rslox::compiled::tests::unsafe_compile;
 
     use super::*;
 
+    lazy_static! {
+        static ref TRIMMER: Regex = Regex::new(r" +\n").unwrap();
+    }
+    fn assert_bytecode(
+        code: &str,
+        expected: &str,
+    ) -> () {
+        use pretty_assertions_sorted::assert_eq;
+        let string = disassemble(&unsafe_compile(vec![code.trim()])).join("\n");
+        assert_eq!(expected.trim(), TRIMMER.replace_all(string.trim(), "\n"))
+    }
+
     #[test]
     fn constant() {
-        let mut expected: Code = Default::default();
-        expected.write(OpCode::Number(123.0), 1);
-        expected.write(OpCode::Pop, 1);
-        assert_eq!(
-            unsafe_compile(vec!["123;"]).get_code(),
-            &expected,
+        assert_bytecode(
+            "123;",
+            r#"
+00:  1 NUMBER         123
+01:  | POP
+"#,
         )
     }
 
     #[test]
     fn grouped_constant() {
-        let mut expected: Code = Default::default();
-        expected.write(OpCode::Number(123.0), 1);
-        expected.write(OpCode::Pop, 1);
-        assert_eq!(
-            compile(unsafe_tokenize(vec!["(123);"])).unwrap().get_code(),
-            &expected,
+        assert_bytecode(
+            "123;",
+            r#"
+00:  1 NUMBER         123
+01:  | POP
+"#,
         )
     }
 
     #[test]
     fn unary_minus() {
-        let mut expected: Code = Default::default();
-        expected.write(OpCode::Number(123.0), 1);
-        expected.write(OpCode::Negate, 1);
-        expected.write(OpCode::Pop, 1);
-        assert_eq!(
-            unsafe_compile(vec!["-123;"]).get_code(),
-            &expected,
+        assert_bytecode(
+            "-123;",
+            r#"
+00:  1 NUMBER         123
+01:  | NEGATE
+02:  | POP
+"#,
         )
     }
 
     #[test]
     fn basic_precedence() {
-        let mut expected: Code = Default::default();
-        expected.write(OpCode::Number(1.0), 1);
-        expected.write(OpCode::Negate, 1);
-        expected.write(OpCode::Number(2.0), 1);
-        expected.write(OpCode::Add, 1);
-        expected.write(OpCode::Pop, 1);
-        assert_eq!(
-            unsafe_compile(vec!["-1+2;"]).get_code(),
-            &expected,
+        assert_bytecode(
+            "-1+2;",
+            r#"
+00:  1 NUMBER         1
+01:  | NEGATE
+02:  | NUMBER         2
+03:  | ADD
+04:  | POP"#,
         )
     }
 
     #[test]
     fn mixed_unary_and_binary() {
-        let mut expected: Code = Default::default();
-        expected.write(OpCode::Number(1.0), 1);
-        expected.write(OpCode::Negate, 1);
-        expected.write(OpCode::Number(2.0), 1);
-        expected.write(OpCode::Subtract, 1);
-        expected.write(OpCode::Pop, 1);
-        assert_eq!(
-            unsafe_compile(vec!["-1-2;"]).get_code(),
-            &expected,
-        )
-    }
-
-    #[test]
-    fn string_interning() {
-        let mut expected = HashSet::new();
-        expected.insert(Rc::new("str".to_owned()));
-        assert_eq!(
-            unsafe_compile(vec![r#""str" == "str";"#]).get_interned_strings(),
-            &expected,
+        assert_bytecode(
+            "-1-2;",
+            r#"
+00:  1 NUMBER         1
+01:  | NEGATE
+02:  | NUMBER         2
+03:  | SUBTRACT
+04:  | POP            "#,
         )
     }
 
@@ -857,14 +862,11 @@ mod tests {
 
     #[test]
     fn define_nil_var() {
-        let compiled = unsafe_compile(vec!["var foo;"]);
-        let mut expected: Chunk = Default::default();
-        let w = expected.intern_string("foo".to_owned());
-        expected.write(OpCode::Nil, 1);
-        expected.write(OpCode::DefineGlobal(w), 1);
-        assert_deep_eq!(
-            compiled,
-            expected,
+        assert_bytecode(
+            "var foo;",
+            r#"
+00:  1 NIL
+01:  | DEFINE_GLOBAL  'foo'"#,
         )
     }
 
@@ -903,41 +905,37 @@ mod tests {
 
     #[test]
     fn depth_is_reduced() {
-        let compiled = unsafe_compile(vec![
-            "{",
-            "}",
-            "var x = 42;",
-            "print x;",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let x = expected.intern_string("x".to_owned());
-        expected.write(OpCode::Number(42.0), 3);
-        expected.write(OpCode::DefineGlobal(x.clone()), 3);
-        expected.write(OpCode::GetGlobal(x), 4);
-        expected.write(OpCode::Print, 4);
-        assert_deep_eq!(expected, compiled)
+        assert_bytecode(
+            r#"
+{
+}
+var x = 42;
+print x;"#,
+            r#"
+00:  3 NUMBER         42
+01:  | DEFINE_GLOBAL  'x'
+02:  4 GET_GLOBAL     'x'
+03:  | PRINT"#,
+        )
     }
 
     #[test]
     fn local_variable_order() {
-        let compiled = unsafe_compile(vec![
-            "{",
-            "  var x = 1;",
-            "  var y = 2;",
-            "  print x - y;",
-            "}",
-        ]);
-        let mut expected: Chunk = Default::default();
-        expected.intern_string("x".to_owned());
-        expected.intern_string("y".to_owned());
-        expected.write(OpCode::Number(1.0), 2);
-        expected.write(OpCode::Number(2.0), 3);
-        expected.write(OpCode::GetLocal(0), 4);
-        expected.write(OpCode::GetLocal(1), 4);
-        expected.write(OpCode::Subtract, 4);
-        expected.write(OpCode::Print, 4);
-        expected.write(OpCode::PopN(2), 5);
-        assert_deep_eq!(expected, compiled)
+        assert_bytecode(r#"
+{
+  var x = 1;
+  var y = 2;
+  print x - y;
+}"#,
+                        r#"
+00:  2 NUMBER         1
+01:  3 NUMBER         2
+02:  4 GET_LOCAL      0
+03:  | GET_LOCAL      1
+04:  | SUBTRACT
+05:  | PRINT
+06:  5 POP_N          2"#,
+        )
     }
 
 
@@ -954,410 +952,323 @@ mod tests {
 
     #[test]
     fn patched_if() {
-        let compiled = unsafe_compile(vec![
-            "if (false) {",
-            "  print \"wtf\";",
-            "}",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let s = expected.intern_string("wtf".to_owned());
-        expected.write(OpCode::Bool(false), 1);
-        expected.write(OpCode::JumpIfFalse(4), 1);
-        expected.write(OpCode::String(s), 2);
-        expected.write(OpCode::Print, 2);
-        assert_deep_eq!(expected, compiled)
+        assert_bytecode(
+            r#"
+if (false) {
+  print "wtf";
+}
+            "#,
+            r#"
+00:  1 BOOL           false
+01:  | JUMP_IF_FALSE  4
+02:  2 STRING         'wtf'
+03:  | PRINT
+"#,
+        )
     }
 
     #[test]
     fn patched_if_else() {
-        let compiled = unsafe_compile(vec![
-            "if (false) {",
-            "  print \"wtf\";",
-            "} else {",
-            "  print \"ok\";",
-            "}",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let s1 = expected.intern_string("wtf".to_owned());
-        let s2 = expected.intern_string("ok".to_owned());
-        expected.write(OpCode::Bool(false), 1);
-        expected.write(OpCode::JumpIfFalse(5), 1);
-        expected.write(OpCode::String(s1), 2);
-        expected.write(OpCode::Print, 2);
-        expected.write(OpCode::Jump(7), 3);
-        expected.write(OpCode::String(s2), 4);
-        expected.write(OpCode::Print, 4);
-        assert_deep_eq!(expected, compiled)
+        assert_bytecode(
+            r#"
+if (false) {
+  print "wtf";
+} else {
+  print "ok";
+}
+            "#,
+            r#"
+00:  1 BOOL           false
+01:  | JUMP_IF_FALSE  5
+02:  2 STRING         'wtf'
+03:  | PRINT
+04:  3 JUMP           7
+05:  4 STRING         'ok'
+06:  | PRINT
+                "#,
+        )
     }
 
     #[test]
     fn define_and_print_function() {
-        let compiled = unsafe_compile(vec![
-            "fun areWeHavingItYet() {",
-            "  print \"Yes we are!\";",
-            "}",
-            "print areWeHavingItYet;",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("areWeHavingItYet".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        let w2 = function_chunk.intern_string("Yes we are!".to_owned());
-        function_chunk.write(OpCode::String(w2), 2);
-        function_chunk.write(OpCode::Print, 2);
-        function_chunk.write(OpCode::Nil, 3);
-        function_chunk.write(OpCode::Return(0), 3);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 0,
-                chunk: function_chunk,
-            },
-            1,
-            Default::default(), // TODO extract utility
-        );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        expected.write(OpCode::GetGlobal(f.clone()), 4);
-        expected.write(OpCode::Print, 4);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun areWeHavingItYet() {
+  print "Yes we are!";
+}
+print areWeHavingItYet;
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'areWeHavingItYet'
+02:  4 GET_GLOBAL     'areWeHavingItYet'
+03:  | PRINT
+<fun areWeHavingItYet>
+00:  2 STRING         'Yes we are!'
+01:  | PRINT
+02:  3 NIL
+03:  | RETURN         0
+<end areWeHavingItYet>
+              "#,
+        )
     }
 
     #[test]
     fn define_function_with_local_variables() {
-        let compiled = unsafe_compile(vec![
-            "fun areWeHavingItYet() {",
-            "  var x = 1;",
-            "  var y = 2;",
-            "  print x + y;",
-            "}",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("areWeHavingItYet".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        function_chunk.intern_string("x".to_owned());
-        function_chunk.intern_string("y".to_owned());
-        function_chunk.write(OpCode::Number(1.0), 2);
-        function_chunk.write(OpCode::Number(2.0), 3);
-        function_chunk.write(OpCode::GetLocal(0), 4);
-        function_chunk.write(OpCode::GetLocal(1), 4);
-        function_chunk.write(OpCode::Add, 4);
-        function_chunk.write(OpCode::Print, 4);
-        function_chunk.write(OpCode::Nil, 5);
-        function_chunk.write(OpCode::Return(2), 5);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 0,
-                chunk: function_chunk,
-            },
-            1,
-            Default::default(),
+        assert_bytecode(
+            r#"
+fun areWeHavingItYet() {
+  var x = 1;
+  var y = 2;
+  print x + y;
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'areWeHavingItYet'
+<fun areWeHavingItYet>
+00:  2 NUMBER         1
+01:  3 NUMBER         2
+02:  4 GET_LOCAL      0
+03:  | GET_LOCAL      1
+04:  | ADD
+05:  | PRINT
+06:  5 NIL
+07:  | RETURN         2
+<end areWeHavingItYet>
+            "#,
         );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        assert_deep_eq!(expected, compiled);
     }
 
     #[test]
     fn call_function() {
-        let compiled = unsafe_compile(vec![
-            "fun areWeHavingItYet() {",
-            "  print \"Yes we are!\";",
-            "}",
-            "areWeHavingItYet();",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("areWeHavingItYet".to_owned());
-        expected.write(OpCode::Function(0), 1);
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        expected.write(OpCode::GetGlobal(f.clone()), 4);
-        expected.write(OpCode::Call(0), 4);
-        expected.write(OpCode::Pop, 4);
-        assert_deep_eq!(expected.get_code(), compiled.get_code());
+        assert_bytecode(
+            r#"
+fun areWeHavingItYet() {
+  print "Yes we are!";
+}
+areWeHavingItYet();
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'areWeHavingItYet'
+02:  4 GET_GLOBAL     'areWeHavingItYet'
+03:  | CALL           '0'
+04:  | POP
+<fun areWeHavingItYet>
+00:  2 STRING         'Yes we are!'
+01:  | PRINT
+02:  3 NIL
+03:  | RETURN         0
+<end areWeHavingItYet>
+            "#,
+        )
     }
 
     #[test]
     fn define_function_with_args() {
-        let compiled = unsafe_compile(vec![
-            "fun areWeHavingItYet(x, y) {",
-            "  var z = 1;",
-            "  print x + y + z;",
-            "}",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("areWeHavingItYet".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        function_chunk.intern_string("x".to_owned());
-        function_chunk.intern_string("y".to_owned());
-        function_chunk.intern_string("z".to_owned());
-        function_chunk.write(OpCode::Number(1.0), 2);
-        function_chunk.write(OpCode::GetLocal(0), 3);
-        function_chunk.write(OpCode::GetLocal(1), 3);
-        function_chunk.write(OpCode::Add, 3);
-        function_chunk.write(OpCode::GetLocal(2), 3);
-        function_chunk.write(OpCode::Add, 3);
-        function_chunk.write(OpCode::Print, 3);
-        function_chunk.write(OpCode::Nil, 4);
-        function_chunk.write(OpCode::Return(3), 4);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 2,
-                chunk: function_chunk,
-            },
-            1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun areWeHavingItYet(x, y) {
+  var z = 1;
+  print x + y + z;
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'areWeHavingItYet'
+<fun areWeHavingItYet>
+00:  2 NUMBER         1
+01:  3 GET_LOCAL      0
+02:  | GET_LOCAL      1
+03:  | ADD
+04:  | GET_LOCAL      2
+05:  | ADD
+06:  | PRINT
+07:  4 NIL
+08:  | RETURN         3
+<end areWeHavingItYet>
+           "#,
+        )
     }
 
     #[test]
     fn call_function_with_args() {
-        let compiled = unsafe_compile(vec![
-            "fun areWeHavingItYet(x, y) {",
-            "  var z = 1;",
-            "  print x + y + z;",
-            "}",
-            "var x = 52;",
-            "var z = 12;",
-            "areWeHavingItYet(x, z);",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("areWeHavingItYet".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        function_chunk.intern_string("x".to_owned());
-        function_chunk.intern_string("y".to_owned());
-        function_chunk.intern_string("z".to_owned());
-        function_chunk.write(OpCode::Number(1.0), 2);
-        function_chunk.write(OpCode::GetLocal(0), 3);
-        function_chunk.write(OpCode::GetLocal(1), 3);
-        function_chunk.write(OpCode::Add, 3);
-        function_chunk.write(OpCode::GetLocal(2), 3);
-        function_chunk.write(OpCode::Add, 3);
-        function_chunk.write(OpCode::Print, 3);
-        function_chunk.write(OpCode::Nil, 4);
-        function_chunk.write(OpCode::Return(3), 4);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 2,
-                chunk: function_chunk,
-            }, 1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        expected.write(OpCode::Number(52.0), 5);
-        let x = expected.intern_string("x".to_owned());
-        expected.write(OpCode::DefineGlobal(x.clone()), 5);
-        expected.write(OpCode::Number(12.0), 6);
-        let z = expected.intern_string("z".to_owned());
-        expected.write(OpCode::DefineGlobal(z.clone()), 6);
-        expected.write(OpCode::GetGlobal(f.clone()), 7);
-        expected.write(OpCode::GetGlobal(x.clone()), 7);
-        expected.write(OpCode::GetGlobal(z.clone()), 7);
-        expected.write(OpCode::Call(2), 7);
-        expected.write(OpCode::Pop, 7);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun areWeHavingItYet(x, y) {
+  var z = 1;
+  print x + y + z;
+}
+var x = 52;
+var z = 12;
+areWeHavingItYet(x, z);
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'areWeHavingItYet'
+02:  5 NUMBER         52
+03:  | DEFINE_GLOBAL  'x'
+04:  6 NUMBER         12
+05:  | DEFINE_GLOBAL  'z'
+06:  7 GET_GLOBAL     'areWeHavingItYet'
+07:  | GET_GLOBAL     'x'
+08:  | GET_GLOBAL     'z'
+09:  | CALL           '2'
+10:  | POP
+<fun areWeHavingItYet>
+00:  2 NUMBER         1
+01:  3 GET_LOCAL      0
+02:  | GET_LOCAL      1
+03:  | ADD
+04:  | GET_LOCAL      2
+05:  | ADD
+06:  | PRINT
+07:  4 NIL
+08:  | RETURN         3
+<end areWeHavingItYet>
+"#,
+        )
     }
 
     #[test]
     fn implicit_function_return() {
-        let compiled = unsafe_compile(vec![
-            "fun foo() {",
-            "  print \"hi\";",
-            "}",
-        ]);
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("foo".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        let w2 = function_chunk.intern_string("hi".to_owned());
-        function_chunk.write(OpCode::String(w2), 2);
-        function_chunk.write(OpCode::Print, 2);
-        function_chunk.write(OpCode::Nil, 3);
-        function_chunk.write(OpCode::Return(0), 3);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 0,
-                chunk: function_chunk,
-            },
-            1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun foo() {
+  print "hi";
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'foo'
+<fun foo>
+00:  2 STRING         'hi'
+01:  | PRINT
+02:  3 NIL
+03:  | RETURN         0
+<end foo>
+            "#,
+        )
     }
 
     #[test]
     fn basic_function_return() {
-        let compiled = unsafe_compile(vec![
-            "fun plus(x, y) {",
-            "  return x + y;",
-            "}",
-            "print plus(10, 20);",
-        ]);
-
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("plus".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        function_chunk.intern_string("x".to_owned());
-        function_chunk.intern_string("y".to_owned());
-        function_chunk.write(OpCode::GetLocal(0), 2);
-        function_chunk.write(OpCode::GetLocal(1), 2);
-        function_chunk.write(OpCode::Add, 2);
-        function_chunk.write(OpCode::Return(2), 2);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 2,
-                chunk: function_chunk,
-            }, 1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        expected.write(OpCode::GetGlobal(f.clone()), 4);
-        expected.write(OpCode::Number(10.0), 4);
-        expected.write(OpCode::Number(20.0), 4);
-        expected.write(OpCode::Call(2), 4);
-        expected.write(OpCode::Print, 4);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun plus(x, y) {
+  return x + y;
+}
+print plus(10, 20);
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'plus'
+02:  4 GET_GLOBAL     'plus'
+03:  | NUMBER         10
+04:  | NUMBER         20
+05:  | CALL           '2'
+06:  | PRINT
+<fun plus>
+00:  2 GET_LOCAL      0
+01:  | GET_LOCAL      1
+02:  | ADD
+03:  | RETURN         2
+<end plus>
+            "#,
+        )
     }
 
     #[test]
     fn return_inside_if() {
-        let compiled = unsafe_compile(vec![
-            "fun foo(x) {",
-            "  if (x > 0) {",
-            "    return 1;",
-            "  }",
-            "  return 2;",
-            "}",
-        ]);
-
-        let mut expected: Chunk = Default::default();
-        let f = expected.intern_string("foo".to_owned());
-        let mut function_chunk: Chunk = Default::default();
-        function_chunk.intern_string("x".to_owned());
-        function_chunk.write(OpCode::GetLocal(0), 2);
-        function_chunk.write(OpCode::Number(0.0), 2);
-        function_chunk.write(OpCode::Greater, 2);
-        function_chunk.write(OpCode::JumpIfFalse(6), 2);
-        function_chunk.write(OpCode::Number(1.0), 3);
-        function_chunk.write(OpCode::Return(1), 3);
-        function_chunk.write(OpCode::Number(2.0), 5);
-        function_chunk.write(OpCode::Return(1), 5);
-        expected.add_function(
-            Function {
-                name: f.clone(),
-                arity: 1,
-                chunk: function_chunk,
-            }, 1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(f.clone()), 1);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun foo(x) {
+  if (x > 0) {
+    return 1;
+  }
+  return 2;
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'foo'
+<fun foo>
+00:  2 GET_LOCAL      0
+01:  | NUMBER         0
+02:  | GREATER
+03:  | JUMP_IF_FALSE  6
+04:  3 NUMBER         1
+05:  | RETURN         1
+06:  5 NUMBER         2
+07:  | RETURN         1
+<end foo>
+            "#,
+        )
     }
 
     #[test]
     fn basic_closure_local() {
-        let compiled = unsafe_compile(vec![
-            "fun foo(x) {",
-            "  fun bar() {",
-            "    return x;",
-            "  }",
-            "  return bar;",
-            "}",
-        ]);
-
-        let mut expected: Chunk = Chunk::default();
-        let foo_name = expected.intern_string("foo".to_owned());
-        let mut foo: Chunk = Default::default();
-        foo.intern_string("x".to_owned());
-        let mut bar = Chunk::default();
-        bar.intern_string("x".to_owned());
-        bar.write(OpCode::GetUpvalue(0), 3);
-        bar.write(OpCode::Return(0), 3);
-        let bar_name = foo.intern_string("bar".to_owned());
-        foo.add_function(
-            Function {
-                name: bar_name.clone(),
-                arity: 0,
-                chunk: bar,
-            },
-            2,
-            vec![UpValue { index: 0, is_local: true }],
-        );
-        foo.write(OpCode::GetLocal(1), 5);
-        foo.write(OpCode::Return(2), 5);
-        expected.add_function(
-            Function {
-                name: foo_name.clone(),
-                arity: 1,
-                chunk: foo,
-            }, 1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(foo_name.clone()), 1);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun foo(x) {
+  fun bar() {
+    return x;
+  }
+  return bar;
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'foo'
+<fun foo>
+00:  2 FUNCTION       0
+01:  | UPVALUE        [(0,t)]
+02:  5 GET_LOCAL      1
+03:  | RETURN         2
+<fun bar>
+00:  3 GET_UPVALUE    '0'
+01:  | RETURN         0
+<end bar>
+<end foo>
+            "#,
+        )
     }
 
     #[test]
     fn basic_closure_deeper() {
-        let compiled = unsafe_compile(vec![
-            "fun foo(x) {",
-            "  fun bar() {",
-            "    fun bazz() {",
-            "      return x;",
-            "    }",
-            "    return bazz;",
-            "  }",
-            "  return bar;",
-            "}",
-        ]);
-
-        let mut expected: Chunk = Chunk::default();
-        let foo_name = expected.intern_string("foo".to_owned());
-        let mut foo: Chunk = Default::default();
-        foo.intern_string("x".to_owned());
-
-        let mut bar = Chunk::default();
-
-        let mut bazz = Chunk::default();
-        bazz.intern_string("x".to_owned());
-        bazz.write(OpCode::GetUpvalue(0), 4);
-        bazz.write(OpCode::Return(0), 4);
-
-        let bazz_name = bar.intern_string("bazz".to_owned());
-        bar.add_function(Function {
-            name: bazz_name.clone(),
-            arity: 0,
-            chunk: bazz,
-        },
-                         3,
-                         vec![UpValue { index: 0, is_local: false }],
-        );
-        bar.write(OpCode::GetLocal(0), 6);
-        bar.write(OpCode::Return(1), 6);
-
-        let bar_name = foo.intern_string("bar".to_owned());
-        foo.add_function(Function {
-            name: bar_name.clone(),
-            arity: 0,
-            chunk: bar,
-        }, 2,
-                         vec![UpValue { index: 0, is_local: true }],
-        );
-        foo.write(OpCode::GetLocal(1), 8);
-        foo.write(OpCode::Return(2), 8);
-        expected.add_function(
-            Function {
-                name: foo_name.clone(),
-                arity: 1,
-                chunk: foo,
-            },
-            1,
-            Default::default(),
-        );
-        expected.write(OpCode::DefineGlobal(foo_name.clone()), 1);
-        assert_deep_eq!(expected, compiled);
+        assert_bytecode(
+            r#"
+fun foo(x) {
+  fun bar() {
+    fun bazz() {
+      return x;
+    }
+    return bazz;
+  }
+  return bar;
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'foo'
+<fun foo>
+00:  2 FUNCTION       0
+01:  | UPVALUE        [(0,t)]
+02:  8 GET_LOCAL      1
+03:  | RETURN         2
+<fun bar>
+00:  3 FUNCTION       0
+01:  | UPVALUE        [(0,f)]
+02:  6 GET_LOCAL      0
+03:  | RETURN         1
+<fun bazz>
+00:  4 GET_UPVALUE    '0'
+01:  | RETURN         0
+<end bazz>
+<end bar>
+<end foo>
+            "#,
+        )
     }
 }

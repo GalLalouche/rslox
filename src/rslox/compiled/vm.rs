@@ -85,7 +85,7 @@ impl VirtualMachine {
             ));
         }
         self.frames.last_mut().run(writer).map(|maybe_cf| match maybe_cf {
-            None => { self.frames.pop(); },
+            None => { self.frames.pop(); }
             Some(cf) => self.frames.push(cf),
         })
     }
@@ -94,63 +94,6 @@ impl VirtualMachine {
 
     fn _debug_stack(&self) -> () {
         self.frames.first()._debug_stack();
-    }
-
-    #[cfg(test)]
-    fn _disassemble(chunk: &Chunk) -> Vec<String> {
-        let mut previous_line: Line = 0;
-        let mut is_first = true;
-        let mut result = Vec::new();
-        for (i, (op, line)) in chunk.get_code().iter().enumerate() {
-            let prefix = format!(
-                "{:0>2}: {:>2}",
-                i,
-                if !is_first && line == &previous_line {
-                    " |".to_owned()
-                } else {
-                    line.to_string()
-                },
-            );
-
-            let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
-                OpCode::Return(num) => format!("{}", num),
-                OpCode::Number(num) => format!("{}", num),
-                OpCode::PopN(num) => format!("{}", num),
-                OpCode::UnpatchedJump =>
-                    panic!("Jump should have been patched at line: '{}'", line),
-                OpCode::JumpIfFalse(index) => format!("{}", index),
-                OpCode::Jump(index) => format!("{}", index),
-                OpCode::Function(i) => format!("{}", i),
-                OpCode::Upvalues(upvalues) => format!("{:?}", upvalues),
-                OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
-                OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
-                OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
-                OpCode::GetUpvalue(index) => format!("'{}'", index),
-                OpCode::SetUpvalue(index) => format!("'{}'", index),
-                OpCode::DefineLocal(index) => format!("{}", index),
-                OpCode::GetLocal(index) => format!("{}", index),
-                OpCode::SetLocal(index) => format!("{}", index),
-                OpCode::Bool(bool) => format!("{}", bool),
-                OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
-                OpCode::Call(arg_count) => format!("'{}'", arg_count),
-                OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
-                OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
-                OpCode::Negate | OpCode::Not =>
-                    "".to_owned(),
-            });
-            result.push(command);
-            previous_line = *line;
-            is_first = false;
-        }
-        for i in 0..chunk.function_count() {
-            let function = chunk.get_function(i);
-            result.push(
-                "fun ".to_owned() + function.unwrap_upgrade().name.unwrap_upgrade().deref() + ":");
-            result.append(
-                &mut VirtualMachine::_disassemble(&function.unwrap_upgrade().chunk));
-            result.push(function.unwrap_upgrade().name.to_owned() + " <end>");
-        }
-        result
     }
 }
 
@@ -431,7 +374,7 @@ mod tests {
     fn final_res(lines: Vec<&str>) -> TracedValue {
         let mut compiled = unsafe_compile(lines);
         // // Comment this in for debugging the compiled program.
-        // eprintln!("disassembled:\n{}", VirtualMachine::_disassemble(&compiled).join("\n"));
+        // eprintln!("disassembled:\n{}", crate::rslox::compiled::compiler::disassemble(&compiled).join("\n"));
         let code = compiled.get_code();
         // Remove the final POP to ensure the stack isn't empty
         assert_eq!(code.last().unwrap().0, OpCode::Pop);
@@ -444,7 +387,7 @@ mod tests {
         let mut buff = Cursor::new(Vec::new());
         let chunk = unsafe_compile(lines);
         // // Comment this in for debugging the compiled program.
-        // eprintln!("disassembled:\n{}", VirtualMachine::_disassemble(&chunk).join("\n"));
+        // eprintln!("disassembled:\n{}", crate::rslox::compiled::compiler::disassemble(&chunk).join("\n"));
         VirtualMachine::run(chunk, &mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
@@ -945,7 +888,8 @@ mod tests {
     }
 
     #[test]
-    fn user_error_on_not_enough_arguments() { assert_eq!(
+    fn user_error_on_not_enough_arguments() {
+        assert_eq!(
             single_error(
                 vec![
                     "fun areWeHavingItYet(x, y) {",

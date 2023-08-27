@@ -11,4 +11,6 @@ num-derive = "0.4.0"
 num-traits = "0.2"
 
 [dev-dependencies]
+lazy_static = "1.4.0"
+regex = "1.9.3"
 pretty_assertions_sorted = "1.2.3"
