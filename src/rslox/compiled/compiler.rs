@@ -289,8 +289,8 @@ impl Compiler {
         let end_line = self.multi_statements()?;
         let (chunk, upvalues) = self.frames.pop().unwrap().finish(end_line);
         self.depth -= 1;
-        let function = Function { name: name.clone(), arity, chunk, upvalues };
-        self.active_chunk_mut().add_function(function, line);
+        let function = Function { name: name.clone(), arity, chunk };
+        self.active_chunk_mut().add_function(function, line, upvalues.into_iter().collect());
         self.define_variable(name, line).to_nonempty()?;
         Ok(end_line)
     }
@@ -699,9 +699,63 @@ type CanAssign = bool;
 type JumpOffset = i8;
 
 #[cfg(test)]
+fn disassemble(chunk: &Chunk) -> Vec<String> {
+    let mut previous_line: Line = 0;
+    let mut is_first = true;
+    let mut result = Vec::new();
+    for (i, (op, line)) in chunk.get_code().iter().enumerate() {
+        let prefix = format!(
+            "{:0>2}: {:>2}",
+            i,
+            if !is_first && line == &previous_line {
+                " |".to_owned()
+            } else {
+                line.to_string()
+            },
+        );
+
+        let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
+            OpCode::Return(num) => format!("{}", num),
+            OpCode::Number(num) => format!("{}", num),
+            OpCode::PopN(num) => format!("{}", num),
+            OpCode::UnpatchedJump =>
+                panic!("Jump should have been patched at line: '{}'", line),
+            OpCode::JumpIfFalse(index) => format!("{}", index),
+            OpCode::Jump(index) => format!("{}", index),
+            OpCode::Function(i) => format!("{}", i),
+            OpCode::Upvalues(upvalues) => format!("{:?}", upvalues),
+            OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+            OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+            OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+            OpCode::GetUpvalue(index) => format!("'{}'", index),
+            OpCode::SetUpvalue(index) => format!("'{}'", index),
+            OpCode::DefineLocal(index) => format!("{}", index),
+            OpCode::GetLocal(index) => format!("{}", index),
+            OpCode::SetLocal(index) => format!("{}", index),
+            OpCode::Bool(bool) => format!("{}", bool),
+            OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
+            OpCode::Call(arg_count) => format!("'{}'", arg_count),
+            OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
+            OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
+            OpCode::Negate | OpCode::Not =>
+                "".to_owned(),
+        });
+        result.push(command);
+        previous_line = *line;
+        is_first = false;
+    }
+    for i in 0..chunk.function_count() {
+        let function = chunk.get_function(i);
+        // result.push(format!("fun {}",function.unwrap_upgrade().name.unwrap_upgrade().deref()":")
+        result.append(&mut disassemble(&function.unwrap_upgrade().chunk));
+        result.push(function.unwrap_upgrade().name.to_owned() + " <end>");
+    }
+    result
+}
+
+#[cfg(test)]
 mod tests {
     use std::collections::HashSet;
-    use std::iter::FromIterator;
     use std::ops::Deref;
     use std::rc::Rc;
 
@@ -952,12 +1006,15 @@ mod tests {
         function_chunk.write(OpCode::Print, 2);
         function_chunk.write(OpCode::Nil, 3);
         function_chunk.write(OpCode::Return(0), 3);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 0,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 0,
+                chunk: function_chunk,
+            },
+            1,
+            Default::default(), // TODO extract utility
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
         expected.write(OpCode::Print, 4);
@@ -986,12 +1043,15 @@ mod tests {
         function_chunk.write(OpCode::Print, 4);
         function_chunk.write(OpCode::Nil, 5);
         function_chunk.write(OpCode::Return(2), 5);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 0,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 0,
+                chunk: function_chunk,
+            },
+            1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
@@ -1037,12 +1097,15 @@ mod tests {
         function_chunk.write(OpCode::Print, 3);
         function_chunk.write(OpCode::Nil, 4);
         function_chunk.write(OpCode::Return(3), 4);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 2,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 2,
+                chunk: function_chunk,
+            },
+            1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
@@ -1073,12 +1136,14 @@ mod tests {
         function_chunk.write(OpCode::Print, 3);
         function_chunk.write(OpCode::Nil, 4);
         function_chunk.write(OpCode::Return(3), 4);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 2,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 2,
+                chunk: function_chunk,
+            }, 1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::Number(52.0), 5);
         let x = expected.intern_string("x".to_owned());
@@ -1109,12 +1174,15 @@ mod tests {
         function_chunk.write(OpCode::Print, 2);
         function_chunk.write(OpCode::Nil, 3);
         function_chunk.write(OpCode::Return(0), 3);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 0,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 0,
+                chunk: function_chunk,
+            },
+            1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
@@ -1137,12 +1205,14 @@ mod tests {
         function_chunk.write(OpCode::GetLocal(1), 2);
         function_chunk.write(OpCode::Add, 2);
         function_chunk.write(OpCode::Return(2), 2);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 2,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 2,
+                chunk: function_chunk,
+            }, 1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         expected.write(OpCode::GetGlobal(f.clone()), 4);
         expected.write(OpCode::Number(10.0), 4);
@@ -1175,12 +1245,14 @@ mod tests {
         function_chunk.write(OpCode::Return(1), 3);
         function_chunk.write(OpCode::Number(2.0), 5);
         function_chunk.write(OpCode::Return(1), 5);
-        expected.add_function(Function {
-            name: f.clone(),
-            arity: 1,
-            chunk: function_chunk,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: f.clone(),
+                arity: 1,
+                chunk: function_chunk,
+            }, 1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
@@ -1205,20 +1277,25 @@ mod tests {
         bar.write(OpCode::GetUpvalue(0), 3);
         bar.write(OpCode::Return(0), 3);
         let bar_name = foo.intern_string("bar".to_owned());
-        foo.add_function(Function {
-            name: bar_name.clone(),
-            arity: 0,
-            chunk: bar,
-            upvalues: HashSet::from_iter(vec![UpValue { index: 0, is_local: true }]),
-        }, 2);
+        foo.add_function(
+            Function {
+                name: bar_name.clone(),
+                arity: 0,
+                chunk: bar,
+            },
+            2,
+            vec![UpValue { index: 0, is_local: true }],
+        );
         foo.write(OpCode::GetLocal(1), 5);
         foo.write(OpCode::Return(2), 5);
-        expected.add_function(Function {
-            name: foo_name.clone(),
-            arity: 1,
-            chunk: foo,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: foo_name.clone(),
+                arity: 1,
+                chunk: foo,
+            }, 1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(foo_name.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
@@ -1254,8 +1331,10 @@ mod tests {
             name: bazz_name.clone(),
             arity: 0,
             chunk: bazz,
-            upvalues: HashSet::from_iter(vec![UpValue { index: 0, is_local: false }]),
-        }, 3);
+        },
+                         3,
+                         vec![UpValue { index: 0, is_local: false }],
+        );
         bar.write(OpCode::GetLocal(0), 6);
         bar.write(OpCode::Return(1), 6);
 
@@ -1264,16 +1343,20 @@ mod tests {
             name: bar_name.clone(),
             arity: 0,
             chunk: bar,
-            upvalues: HashSet::from_iter(vec![UpValue { index: 0, is_local: true }]),
-        }, 2);
+        }, 2,
+                         vec![UpValue { index: 0, is_local: true }],
+        );
         foo.write(OpCode::GetLocal(1), 8);
         foo.write(OpCode::Return(2), 8);
-        expected.add_function(Function {
-            name: foo_name.clone(),
-            arity: 1,
-            chunk: foo,
-            upvalues: Default::default(),
-        }, 1);
+        expected.add_function(
+            Function {
+                name: foo_name.clone(),
+                arity: 1,
+                chunk: foo,
+            },
+            1,
+            Default::default(),
+        );
         expected.write(OpCode::DefineGlobal(foo_name.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }

@@ -1,5 +1,4 @@
 use std::borrow::BorrowMut;
-use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::ops::Deref;
 
@@ -22,7 +21,6 @@ pub struct Function {
     pub name: InternedString,
     pub arity: usize,
     pub chunk: Chunk,
-    pub upvalues: HashSet<UpValue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
@@ -38,7 +36,7 @@ impl Function {
 impl DeepEq for Function {
     fn deep_eq(&self, other: &Self) -> bool {
         self.name.to_owned() == other.name.to_owned() && self.arity == other.arity &&
-            self.chunk.deep_eq(&other.chunk) && self.upvalues == other.upvalues
+            self.chunk.deep_eq(&other.chunk)
     }
 }
 

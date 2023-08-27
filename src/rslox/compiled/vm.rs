@@ -47,7 +47,6 @@ impl VirtualMachine {
             name: GcWeak::from(&name),
             arity: 0,
             chunk,
-            upvalues: Default::default(),
         });
         let stack: Rc<RefCell<Vec<Value>>> = Default::default();
         let globals: Rc<RefCell<HashMap<String, Value>>> = Default::default();
@@ -122,6 +121,7 @@ impl VirtualMachine {
                 OpCode::JumpIfFalse(index) => format!("{}", index),
                 OpCode::Jump(index) => format!("{}", index),
                 OpCode::Function(i) => format!("{}", i),
+                OpCode::Upvalues(upvalues) => format!("{:?}", upvalues),
                 OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
                 OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
                 OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
@@ -224,6 +224,7 @@ impl CallFrame {
                 OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
                 OpCode::Function(i) =>
                     stack.borrow_mut().push(Value::Closure(chunk.get_function(*i))),
+                OpCode::Upvalues(upvalues) => panic!(),
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
