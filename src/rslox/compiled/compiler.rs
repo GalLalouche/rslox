@@ -500,19 +500,18 @@ impl Compiler {
     }
 
     fn resolve_upvalue_aux(
-        &mut self, name: &InternedString, line: Line, i: usize) -> Option<StackLocation> {
-        if i < 1 {
+        &mut self, name: &InternedString, line: Line, frame_index: usize) -> Option<StackLocation> {
+        if frame_index < 1 {
             return None;
         }
-        match self.frames.get_mut(i - 1) {
+        match self.frames.get_mut(frame_index - 1) {
             None => None,
             Some(e) => {
                 let option =
-                    e.resolve_local(name, line)
-                        .expect("Uninitialized upvalue")
-                        .or_else(|| self.resolve_upvalue_aux(name, line, i - 1));
-                if let Some(i) = option {
-                    self.frames[i].insert_local_upvalue(i)
+                    e.resolve_local_for_upvalue(name)
+                        .or_else(|| self.resolve_upvalue_aux(name, line, frame_index - 1));
+                if let Some(local_index) = option {
+                    self.frames[frame_index].insert_local_upvalue(local_index)
                 }
                 option
             }
@@ -610,15 +609,30 @@ impl FunctionContext {
                     Token::new(line, TokenType::identifier(name.to_owned())),
                 ));
             }
-            if name == local_name {
+            if name.compare_values(local_name) {
                 return Ok(Some(i));
             }
         }
         return Ok(None);
     }
 
+    pub fn resolve_local_for_upvalue(&self, name: &InternedString) -> Option<StackLocation> {
+        for (i, (local_name, depth)) in self.locals.iter().enumerate() {
+            assert_ne!(depth, &UNINITIALIZED);
+            if name.compare_values(local_name) {
+                assert_ne!(name, local_name);
+                return Some(i);
+            }
+        }
+        None
+    }
+
     pub fn insert_local_upvalue(&mut self, index: StackLocation) {
         self.upvalues.insert(UpValue { index, is_local: true });
+    }
+
+    pub fn insert_nonlocal_upvalue(&mut self, index: StackLocation) {
+        self.upvalues.insert(UpValue { index, is_local: false });
     }
 
     pub fn make_return(&mut self, line: Line) {
@@ -690,6 +704,7 @@ type JumpOffset = i8;
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+    use std::iter::FromIterator;
     use std::ops::Deref;
     use std::rc::Rc;
 
@@ -1170,6 +1185,44 @@ mod tests {
             upvalues: Default::default(),
         }, 1);
         expected.write(OpCode::DefineGlobal(f.clone()), 1);
+        assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn basic_closure_local() {
+        let compiled = unsafe_compile(vec![
+            "fun foo(x) {",
+            "  fun bar() {",
+            "    return x;",
+            "  }",
+            "  return bar;",
+            "}",
+        ]);
+
+        let mut expected: Chunk = Chunk::default();
+        let foo_name = expected.intern_string("foo".to_owned());
+        let mut foo: Chunk = Default::default();
+        foo.intern_string("x".to_owned());
+        let mut bar = Chunk::default();
+        bar.intern_string("x".to_owned());
+        bar.write(OpCode::GetUpvalue(0), 3);
+        bar.write(OpCode::Return(0), 3);
+        let bar_name = foo.intern_string("bar".to_owned());
+        foo.add_function(Function {
+            name: bar_name.clone(),
+            arity: 0,
+            chunk: bar,
+            upvalues: HashSet::from_iter(vec![UpValue {index: 0, is_local: true}]),
+        }, 2);
+        foo.write(OpCode::GetLocal(1), 5);
+        foo.write(OpCode::Return(2), 5);
+        expected.add_function(Function {
+            name: foo_name.clone(),
+            arity: 1,
+            chunk: foo,
+            upvalues: Default::default(),
+        }, 1);
+        expected.write(OpCode::DefineGlobal(foo_name.clone()), 1);
         assert_deep_eq!(expected, compiled);
     }
 }

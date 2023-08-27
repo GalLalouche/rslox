@@ -38,7 +38,7 @@ impl Function {
 impl DeepEq for Function {
     fn deep_eq(&self, other: &Self) -> bool {
         self.name.to_owned() == other.name.to_owned() && self.arity == other.arity &&
-            self.chunk.deep_eq(&other.chunk)
+            self.chunk.deep_eq(&other.chunk) && self.upvalues == other.upvalues
     }
 }
 

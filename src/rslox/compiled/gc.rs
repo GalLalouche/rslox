@@ -13,6 +13,12 @@ impl<A> GcWeak<A> {
     }
 }
 
+impl<A: Eq> GcWeak<A> {
+    pub fn compare_values(&self, other: &GcWeak<A>) -> bool {
+        self.0.upgrade().unwrap() == other.0.upgrade().unwrap()
+    }
+}
+
 impl<A: Debug> Debug for GcWeak<A> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GcWeak")
