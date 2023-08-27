@@ -1,12 +1,10 @@
-use std::cell::{Ref, RefCell};
 use std::collections::HashSet;
 use std::mem;
-use std::ops::Deref;
-use std::rc::Rc;
 
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
+use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
@@ -18,72 +16,47 @@ use crate::rslox::compiled::value::{Function, UpValue};
 type CompilerError = ParserError;
 
 pub fn compile(tokens: Vec<Token>) -> LoxResult<Chunk> {
-    convert_errors(FunctionFrame::top_level(Rc::new(RefCell::new(tokens)).clone(), 0).compile())
+    convert_errors(Compiler::new(tokens).compile())
 }
 
 type Depth = i64;
-type IsLocal = bool;
 
 const UNINITIALIZED: Depth = -1;
 
 type TokenPointer = usize;
 
 #[derive(Debug)]
-struct FunctionFrame<'a> {
-    locals: Vec<(InternedString, Depth)>,
+struct Compiler {
+    tokens: Vec<Token>,
+    frames: NonEmpty<FunctionFrame>,
     depth: Depth,
-    chunk: Chunk,
-    enclosing: Option<&'a FunctionFrame<'a>>,
-    upvalues: HashSet<UpValue>,
-
-    tokens: Rc<RefCell<Vec<Token>>>,
     current: TokenPointer,
 }
 
-impl<'a> FunctionFrame<'a> {
-    pub fn top_level(tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer) -> Self {
-        FunctionFrame::new(tokens, current, None)
-    }
-    pub fn internal(
-        tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer, enclosing: &'a FunctionFrame) -> Self {
-        FunctionFrame::new(tokens, current, Some(enclosing))
-    }
 
-    fn new(
-        tokens: Rc<RefCell<Vec<Token>>>, current: TokenPointer, enclosing: Option<&'a FunctionFrame>,
-    ) -> Self {
-        FunctionFrame {
-            locals: Default::default(),
-            chunk: Default::default(),
-            upvalues: Default::default(),
-
-            depth: 0,
-
-            enclosing,
+impl Compiler {
+    pub fn new(tokens: Vec<Token>) -> Self {
+        let top_frame = Default::default();
+        Compiler {
             tokens,
-            current,
+            frames: NonEmpty::new(top_frame),
+            depth: 0,
+            current: 0,
         }
     }
+
     pub fn compile(mut self) -> Result<Chunk, NonEmpty<CompilerError>> {
         let mut errors = Vec::new();
         while !self.is_at_end() {
             self.declaration(&mut errors);
         }
         match NonEmpty::from_vec(errors) {
-            None => Ok(self.chunk),
+            None => {
+                assert_eq!(self.frames.len(), 1);
+                Ok(self.frames.head.chunk)
+            }
             Some(errs) => Err(errs),
         }
-    }
-
-    fn finish(mut self, line: Line) -> (Chunk, TokenPointer, HashSet<UpValue>) {
-        if self.active_chunk().get_code().last().iter().any(|e| match &e.0 {
-            OpCode::Return(_) => false,
-            _ => true,
-        }) {
-            self.active_chunk().write(OpCode::Nil, line);
-            self.make_return(line);
-        }
-        (self.chunk, self.current, self.upvalues)
     }
 
     fn begin_scope(&mut self) {
@@ -93,26 +66,24 @@ impl<'a> FunctionFrame<'a> {
     fn end_scope(&mut self, line: Line) {
         assert!(self.depth > 0);
         let amount_to_keep =
-            self.locals.iter().rposition(|e| e.1 != self.depth).map(|e| e + 1).unwrap_or(0);
-        let amount_to_drop = self.locals.len() - amount_to_keep;
+            self.active_frame().locals.iter()
+                .rposition(|e| e.1 != self.depth)
+                .map_or2(|e| e + 1, 0);
+        let amount_to_drop = self.active_frame().locals.len() - amount_to_keep;
+        let mut_frame = self.active_frame_mut();
         if amount_to_drop == 1 {
-            self.chunk.write(OpCode::Pop, line);
-            self.locals.pop().unwrap();
+            mut_frame.chunk.write(OpCode::Pop, line);
+            mut_frame.locals.pop().unwrap();
         } else if amount_to_drop > 0 {
-            self.chunk.write(OpCode::PopN(amount_to_drop), line);
-            self.locals.truncate(amount_to_keep);
+            mut_frame.chunk.write(OpCode::PopN(amount_to_drop), line);
+            mut_frame.locals.truncate(amount_to_keep);
         }
         self.depth -= 1;
     }
 
-    fn make_return(&mut self, line: Line) {
-        let count = self.locals.len();
-        self.active_chunk().write(OpCode::Return(count), line);
-    }
-
     fn synchronize(&mut self) {
         while !self.is_at_end() && !self.matches(TokenType::Semicolon).is_some() {
-            let should_continue = match self.peek_type().deref() {
+            let should_continue = match self.peek_type() {
                 TokenType::Class | TokenType::Fun | TokenType::Var | TokenType::For | TokenType::If
                 | TokenType::While | TokenType::Print | TokenType::Return => false,
                 _ => true,
@@ -162,7 +133,7 @@ impl<'a> FunctionFrame<'a> {
     fn statement(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         let line = if let Some(line) = self.matches(TokenType::Print) {
             self.compile_expression().to_nonempty()?;
-            self.active_chunk().write(OpCode::Print, line);
+            self.write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::Return) {
             return self.return_stmt(line).to_nonempty();
@@ -183,25 +154,25 @@ impl<'a> FunctionFrame<'a> {
 
     fn return_stmt(&mut self, line: Line) -> Result<Line, CompilerError> {
         if let Some(line) = self.matches(TokenType::Semicolon) {
-            self.chunk.write(OpCode::Nil, line);
+            self.write(OpCode::Nil, line);
         } else {
             self.compile_expression()?;
         }
         self.consume(TokenType::Semicolon, None)?;
-        self.make_return(line);
+        self.active_frame_mut().make_return(line);
         Ok(line)
     }
 
     fn block(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
+        self.begin_scope();
         let ending_line = self.multi_statements()?;
         self.end_scope(ending_line);
         Ok(ending_line)
     }
 
     fn multi_statements(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
-        self.begin_scope();
         let mut errors = Vec::new();
-        while !self.is_at_end() && self.peek_type().deref() != &TokenType::CloseBrace {
+        while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
             self.declaration(&mut errors);
         }
         let ending_line = self.consume(TokenType::CloseBrace, None).to_nonempty()?;
@@ -220,7 +191,7 @@ impl<'a> FunctionFrame<'a> {
             self.jumping_body(line, 0 as JumpOffset, OpCode::Jump)?;
             // Since we added a Jump, we need to fix the JumpIfFalse target.
             let current_jump = self.active_chunk().get_code().get(jump_pos).unwrap().0.clone();
-            (*self.active_chunk().get_mut(jump_pos).unwrap()).0 =
+            (*self.active_chunk_mut().get_mut(jump_pos).unwrap()).0 =
                 match current_jump {
                     OpCode::JumpIfFalse(to) => OpCode::JumpIfFalse(to + 1),
                     e => panic!("Expected JumpIfFalse, was {:?}", e)
@@ -235,7 +206,7 @@ impl<'a> FunctionFrame<'a> {
         self.compile_expression().to_nonempty()?;
         self.consume(TokenType::CloseParen, None).to_nonempty()?;
         self.jumping_body(line, 1 as JumpOffset, OpCode::JumpIfFalse)?;
-        self.active_chunk().write(OpCode::Jump(body_start), line);
+        self.write(OpCode::Jump(body_start), line);
         Ok(line)
     }
 
@@ -258,18 +229,18 @@ impl<'a> FunctionFrame<'a> {
             } else {
                 self.compile_expression().to_nonempty()?;
                 self.consume(TokenType::Semicolon, None).to_nonempty()?;
-                Some(self.active_chunk().write(OpCode::UnpatchedJump, line))
+                Some(self.write(OpCode::UnpatchedJump, line))
             };
         // Increment
         let increment: Option<CodeLocation> =
             if self.matches(TokenType::CloseParen).is_some() {
                 Ok::<Option<CodeLocation>, NonEmpty<CompilerError>>(None)
             } else {
-                let jump_over_increment = self.active_chunk().write(OpCode::UnpatchedJump, line);
+                let jump_over_increment = self.write(OpCode::UnpatchedJump, line);
                 let result = self.active_chunk().get_code().next_location();
                 self.compile_expression().to_nonempty()?;
-                self.active_chunk().write(OpCode::Pop, line);
-                self.active_chunk().write(OpCode::Jump(body_start), line);
+                self.write(OpCode::Pop, line);
+                self.write(OpCode::Jump(body_start), line);
                 self.patch_jump(jump_over_increment, 0 as JumpOffset, OpCode::Jump);
                 self.consume(TokenType::CloseParen, None).to_nonempty()?;
                 Ok(Some(result))
@@ -279,9 +250,9 @@ impl<'a> FunctionFrame<'a> {
             self.patch_jump(cond, 1 as JumpOffset, OpCode::JumpIfFalse);
         }
         if let Some(incr) = increment {
-            self.active_chunk().write(OpCode::Jump(incr), line);
+            self.write(OpCode::Jump(incr), line);
         } else {
-            self.active_chunk().write(OpCode::Jump(body_start), line);
+            self.write(OpCode::Jump(body_start), line);
         }
         self.end_scope(line);
         Ok(line)
@@ -300,7 +271,7 @@ impl<'a> FunctionFrame<'a> {
         } else {
             next_location + offset as usize
         };
-        (*self.active_chunk().get_mut(source).unwrap()).0 = ctor(result);
+        (*self.active_chunk_mut().get_mut(source).unwrap()).0 = ctor(result);
     }
 
     // If new elements are added after this function has finished running, the jump should be after
@@ -308,7 +279,7 @@ impl<'a> FunctionFrame<'a> {
     fn jumping_body<F: FnOnce(CodeLocation) -> OpCode>(
         &mut self, line: Line, offset: JumpOffset, ctor: F,
     ) -> Result<CodeLocation, NonEmpty<CompilerError>> {
-        let jump_pos = self.active_chunk().write(OpCode::UnpatchedJump, line);
+        let jump_pos = self.write(OpCode::UnpatchedJump, line);
         self.statement()?;
         self.patch_jump(jump_pos, offset, ctor);
         Ok(jump_pos)
@@ -317,30 +288,30 @@ impl<'a> FunctionFrame<'a> {
     fn declare_function(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         let (name, line) = self.parse_variable().to_nonempty()?;
         self.mark_initialized();
-        self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        let mut frame = FunctionFrame::internal(self.tokens.clone(), self.current, self);
-        frame.depth += 1;
         let mut arity = 0;
-        if frame.peek_type().deref() != &TokenType::CloseParen {
+        self.depth += 1;
+        self.frames.push(FunctionFrame::default());
+        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        if self.peek_type() != &TokenType::CloseParen {
             loop {
                 arity += 1;
-                let (var_name, line) = frame.parse_variable().to_nonempty()?;
-                frame.define_variable(var_name, line).to_nonempty()?;
-                if frame.matches(TokenType::Comma).is_none() {
+                let (var_name, line) = self.parse_variable().to_nonempty()?;
+                self.define_variable(var_name, line).to_nonempty()?;
+                if self.matches(TokenType::Comma).is_none() {
                     break;
                 }
             }
         }
-        frame.consume(TokenType::CloseParen, None).to_nonempty()?;
-        frame.consume(TokenType::OpenBrace, None).to_nonempty()?;
+        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenBrace, None).to_nonempty()?;
         // Functions don't explicitly clean up after themselves; instead, each return statement
         // knows how many elements to drop from the call stack.
-        let end_line = frame.multi_statements()?;
-        let (chunk, new_current, upvalues) = frame.finish(end_line);
-        let function = Function { name: name.clone(), chunk, arity, upvalues };
-        self.current = new_current;
-        self.chunk.add_function(function, line);
-        self.define_variable(name.clone(), line).to_nonempty()?;
+        let end_line = self.multi_statements()?;
+        let (chunk, upvalues) = self.frames.pop().unwrap().finish(end_line);
+        self.depth -= 1;
+        let function = Function { name: name.clone(), arity, chunk, upvalues };
+        self.active_chunk_mut().add_function(function, line);
+        self.define_variable(name, line).to_nonempty()?;
         Ok(end_line)
     }
 
@@ -349,7 +320,7 @@ impl<'a> FunctionFrame<'a> {
         if can_assign && self.matches(TokenType::Equal).is_some() {
             self.compile_expression()
         } else {
-            self.active_chunk().write(OpCode::Nil, line);
+            self.write(OpCode::Nil, line);
             Ok(line)
         }?;
         self.define_variable(name, line).and_then(|result| {
@@ -367,20 +338,20 @@ impl<'a> FunctionFrame<'a> {
                 token: Token { r#type: e, line },
             })
         }?;
-        let interned = self.chunk.intern_string(name);
+        let interned = self.intern_string(name);
         if self.depth > 0 {
-            self.locals.push((interned.clone(), UNINITIALIZED));
+            self.active_frame_mut().locals.push((interned.clone(), UNINITIALIZED));
         }
         Ok((interned, line))
     }
 
     fn define_variable(&mut self, name: InternedString, line: Line) -> Result<(), CompilerError> {
         if self.depth == 0 {
-            self.active_chunk().write(OpCode::DefineGlobal(name), line);
+            self.write(OpCode::DefineGlobal(name), line);
             Ok(())
         } else {
             // Skipping the first element because that is the current (uninitialized) local.
-            for (local_name, depth) in self.locals.iter().rev().skip(1) {
+            for (local_name, depth) in self.active_frame().locals.iter().rev().skip(1) {
                 if depth < &self.depth {
                     break;
                 }
@@ -396,7 +367,7 @@ impl<'a> FunctionFrame<'a> {
                     });
                 }
             }
-            assert_eq!(self.locals.last().unwrap().0, name);
+            assert_eq!(self.active_frame().locals.last().unwrap().0, name);
             self.mark_initialized();
             Ok(())
         }
@@ -405,13 +376,13 @@ impl<'a> FunctionFrame<'a> {
     fn mark_initialized(&mut self) {
         // No need to initialize globals.
         if self.depth != 0 {
-            self.locals.last_mut().unwrap().1 = self.depth;
+            self.active_frame_mut().locals.last_mut().unwrap().1 = self.depth;
         }
     }
 
     fn expression_statement(&mut self) -> Result<Line, CompilerError> {
         let line = self.compile_expression()?;
-        self.active_chunk().write(OpCode::Pop, line);
+        self.write(OpCode::Pop, line);
         Ok(line)
     }
 
@@ -425,37 +396,36 @@ impl<'a> FunctionFrame<'a> {
         match r#type {
             TokenType::Minus => {
                 self.compile_precedence(Precedence::Unary)?;
-                self.active_chunk().write(OpCode::Negate, line);
+                self.write(OpCode::Negate, line);
             }
             TokenType::Bang => {
                 self.compile_precedence(Precedence::Unary)?;
-                self.active_chunk().write(OpCode::Not, line);
+                self.write(OpCode::Not, line);
             }
             TokenType::NumberLiteral(num) => {
-                self.active_chunk().write(OpCode::Number(num), line);
+                self.write(OpCode::Number(num), line);
             }
             TokenType::Identifier(name) => {
                 let is_assignment = can_assign && self.matches(TokenType::Equal).is_some();
-                let iname = self.chunk.intern_string(name);
+                let iname = self.intern_string(name);
                 let (setter, getter) =
-                    if let Some(index) = self.resolve_local(&iname, line)? {
+                    if let Some(index) = self.active_frame().resolve_local(&iname, line)? {
                         (OpCode::SetLocal(index), OpCode::GetLocal(index))
-                    } else if let Some(index) = self.resolve_upvalue(&iname, line)? {
-                        self.add_upvalue(index, true as IsLocal);
+                    } else if let Some(index) = self.resolve_upvalue(&iname, line) {
                         (OpCode::SetUpvalue(index), OpCode::GetUpvalue(index))
                     } else {
                         (OpCode::SetGlobal(iname.clone()), OpCode::GetGlobal(iname))
                     };
                 if is_assignment {
                     self.compile_expression()?;
-                    self.active_chunk().write(setter, line);
+                    self.write(setter, line);
                 } else {
-                    self.active_chunk().write(getter, line);
+                    self.write(getter, line);
                 }
             }
             TokenType::StringLiteral(str) => {
-                let interned = self.chunk.intern_string(str);
-                self.active_chunk().write(OpCode::String(interned), line);
+                let interned = self.intern_string(str);
+                self.write(OpCode::String(interned), line);
             }
             TokenType::True | TokenType::False | TokenType::Nil => {
                 let op = match &r#type {
@@ -464,7 +434,7 @@ impl<'a> FunctionFrame<'a> {
                     TokenType::Nil => OpCode::Nil,
                     _ => panic!(),
                 };
-                self.active_chunk().write(op, line);
+                self.write(op, line);
             }
             TokenType::OpenParen => {
                 self.compile_expression()?;
@@ -474,7 +444,7 @@ impl<'a> FunctionFrame<'a> {
                 CompilerError::new(format!("Unexpected '{:?}'", e), Token { r#type: e, line })),
         }
         let mut last_line = line;
-        while !self.is_at_end() && precedence <= Precedence::from(self.peek_type().deref()) {
+        while !self.is_at_end() && precedence <= Precedence::from(self.peek_type()) {
             let Token { line, r#type } = self.advance();
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
@@ -494,22 +464,22 @@ impl<'a> FunctionFrame<'a> {
             match op {
                 Left(OpCode::Call(c)) => {
                     self.consume(TokenType::CloseParen, None)?;
-                    self.active_chunk().write(OpCode::Call(c), line);
+                    self.write(OpCode::Call(c), line);
                 }
                 _ => {
                     self.compile_precedence(next_precedence)?;
                     match op {
-                        Left(op) => { self.active_chunk().write(op, line); }
+                        Left(op) => { self.write(op, line); }
                         Right(op) => {
-                            self.active_chunk().write(op, line);
-                            self.active_chunk().write(OpCode::Not, line);
+                            self.write(op, line);
+                            self.write(OpCode::Not, line);
                         }
                     }
                     last_line = line;
-                    if !self.is_at_end() && can_assign && self.peek_type().deref() == &TokenType::Equal {
+                    if !self.is_at_end() && can_assign && self.peek_type() == &TokenType::Equal {
                         return Err(CompilerError::new(
                             "Invalid assignment target.",
-                            self.tokens.borrow()[self.current].clone(),
+                            self.tokens[self.current].clone(),
                         ));
                     }
                 }
@@ -518,13 +488,9 @@ impl<'a> FunctionFrame<'a> {
         Ok(last_line)
     }
 
-    fn add_upvalue(&mut self, index: StackLocation, is_local: IsLocal) {
-        self.upvalues.insert(UpValue { index, is_local });
-    }
-
     fn argument_list(&mut self) -> Result<ArgCount, CompilerError> {
         let mut arity = 0;
-        if self.peek_type().deref() != &TokenType::CloseParen {
+        if self.peek_type() != &TokenType::CloseParen {
             loop {
                 self.compile_expression()?;
                 arity += 1;
@@ -536,41 +502,51 @@ impl<'a> FunctionFrame<'a> {
         Ok(arity)
     }
 
-    fn active_chunk(&mut self) -> &mut Chunk {
-        &mut self.chunk
-    }
+    fn active_frame_mut(&mut self) -> &mut FunctionFrame { self.frames.last_mut() }
+    fn active_frame(&self) -> &FunctionFrame { self.frames.last() }
 
-    fn resolve_local(
-        &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
-        for (i, (local_name, depth)) in self.locals.iter().enumerate() {
-            if depth == &UNINITIALIZED {
-                return Err(CompilerError::new(
-                    format!(
-                        "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
-                    Token::new(line, TokenType::identifier(name.to_owned())),
-                ));
-            }
-            if name == local_name {
-                return Ok(Some(i));
-            }
-        }
-        return Ok(None);
-    }
+    fn active_chunk(&self) -> &Chunk { &self.active_frame().chunk }
+    fn active_chunk_mut(&mut self) -> &mut Chunk { &mut self.active_frame_mut().chunk }
 
     fn resolve_upvalue(
-        &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
-        match self.enclosing {
-            None => Ok(None),
-            Some(cf) => cf.resolve_local(&name, line)
+        &mut self, name: &InternedString, line: Line) -> Option<StackLocation> {
+        self.resolve_upvalue_aux(name, line, self.frames.len() - 1)
+    }
+
+    fn resolve_upvalue_aux(
+        &mut self, name: &InternedString, line: Line, i: usize) -> Option<StackLocation> {
+        if i < 1 {
+            return None;
+        }
+        match self.frames.get_mut(i - 1) {
+            None => None,
+            Some(e) => {
+                let option =
+                    e.resolve_local(name, line)
+                        .expect("Uninitialized upvalue")
+                        .or_else(|| self.resolve_upvalue_aux(name, line, i - 1));
+                if let Some(i) = option {
+                    self.frames[i].insert_local_upvalue(i)
+                }
+                option
+            }
         }
     }
+    // if i - 1 < 0 {
+    //     return None;
+    // }
+    // if (self.frames[])
+    // match self.frames.get_mut(i) {
+    //     None => None,
+    //     Some(f) =>
+    // }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<Line, CompilerError> {
         let expected_msg = msg.unwrap_or(expected.to_string());
         if self.is_at_end() {
             return Err(CompilerError::new(
                 format!("Expected {}, but encountered end of file", expected_msg),
-                self.tokens.borrow().last().expect("empty tokens").to_owned(),
+                self.tokens.last().expect("empty tokens").to_owned(),
             ));
         }
 
@@ -594,8 +570,8 @@ impl<'a> FunctionFrame<'a> {
     fn matches(&mut self, tt: TokenType) -> Option<Line> {
         if self.is_at_end() {
             None
-        } else if self.peek_type().deref() == &tt {
-            let result = self.tokens.borrow()[self.current].line;
+        } else if self.peek_type() == &tt {
+            let result = self.tokens[self.current].line;
             self.advance();
             Some(result)
         } else {
@@ -605,7 +581,7 @@ impl<'a> FunctionFrame<'a> {
 
     fn advance(&mut self) -> Token {
         let result = mem::replace(
-            self.tokens.borrow_mut().get_mut(self.current).unwrap(),
+            self.tokens.get_mut(self.current).unwrap(),
             Token::new(0, TokenType::Eof),
         );
         self.current += 1;
@@ -613,11 +589,63 @@ impl<'a> FunctionFrame<'a> {
     }
 
     fn is_at_end(&self) -> bool {
-        self.current == self.tokens.borrow().len()
+        self.current == self.tokens.len()
     }
 
-    fn peek_type(&self) -> Ref<TokenType> {
-        Ref::map(self.tokens.borrow(), |tokens| &tokens[self.current].r#type)
+    fn peek_type(&self) -> &TokenType { &self.tokens[self.current].r#type }
+
+    fn write(&mut self, code: OpCode, line: Line) -> CodeLocation {
+        self.active_frame_mut().chunk.write(code, line)
+    }
+
+    fn intern_string(&mut self, str: String) -> InternedString {
+        self.active_frame_mut().chunk.intern_string(str)
+    }
+}
+
+#[derive(Debug, Default)]
+struct FunctionFrame {
+    locals: Vec<(InternedString, Depth)>,
+    chunk: Chunk,
+    upvalues: HashSet<UpValue>,
+}
+
+impl FunctionFrame {
+    pub fn finish(mut self, line: Line) -> (Chunk, HashSet<UpValue>) {
+        if self.chunk.get_code().last().iter().any(|e| match &e.0 {
+            OpCode::Return(_) => false,
+            _ => true,
+        }) {
+            self.chunk.write(OpCode::Nil, line);
+            self.make_return(line);
+        }
+        (self.chunk, self.upvalues)
+    }
+
+    pub fn resolve_local(
+        &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
+        for (i, (local_name, depth)) in self.locals.iter().enumerate() {
+            if depth == &UNINITIALIZED {
+                return Err(CompilerError::new(
+                    format!(
+                        "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
+                    Token::new(line, TokenType::identifier(name.to_owned())),
+                ));
+            }
+            if name == local_name {
+                return Ok(Some(i));
+            }
+        }
+        return Ok(None);
+    }
+
+    pub fn insert_local_upvalue(&mut self, index: StackLocation) {
+        self.upvalues.insert(UpValue { index, is_local: true });
+    }
+
+    pub fn make_return(&mut self, line: Line) {
+        let count = self.locals.len();
+        self.chunk.write(OpCode::Return(count), line);
     }
 }
 
@@ -902,7 +930,6 @@ mod tests {
         assert_deep_eq!(expected, compiled)
     }
 
-    // TODO No condition tests will just result in an infinite loop until return inside functions is implemented.
     #[test]
     fn define_and_print_function() {
         let compiled = unsafe_compile(vec![
