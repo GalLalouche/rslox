@@ -391,7 +391,7 @@ impl Compiler {
                 let (setter, getter) =
                     if let Some(index) = self.active_frame().resolve_local(&name, line)? {
                         (OpCode::SetLocal(index), OpCode::GetLocal(index))
-                    } else if let Some(index) = self.resolve_upvalue(&name, line) {
+                    } else if let Some(index) = self.resolve_upvalue(&name) {
                         (OpCode::SetUpvalue(index), OpCode::GetUpvalue(index))
                     } else {
                         (OpCode::SetGlobal(name.clone()), OpCode::GetGlobal(name))
@@ -494,28 +494,25 @@ impl Compiler {
         &mut self.active_frame_mut().locals
     }
 
-    fn resolve_upvalue(
-        &mut self, name: &InternedString, line: Line) -> Option<StackLocation> {
-        self.resolve_upvalue_aux(name, line, self.frames.len() - 1)
+    fn resolve_upvalue(&mut self, name: &InternedString) -> Option<StackLocation> {
+        self.resolve_upvalue_aux(name, self.frames.len() - 1)
     }
 
     fn resolve_upvalue_aux(
-        &mut self, name: &InternedString, line: Line, frame_index: usize) -> Option<StackLocation> {
-        if frame_index < 1 {
+        &mut self, name: &InternedString, frame_index: usize) -> Option<StackLocation> {
+        if frame_index == 0 {
             return None;
         }
-        match self.frames.get_mut(frame_index - 1) {
-            None => None,
-            Some(e) => {
-                let option =
-                    e.resolve_local_for_upvalue(name)
-                        .or_else(|| self.resolve_upvalue_aux(name, line, frame_index - 1));
-                if let Some(local_index) = option {
-                    self.frames[frame_index].insert_local_upvalue(local_index)
-                }
-                option
+        if let Some(enclosing) = self.frames.get_mut(frame_index - 1) {
+            if let Some(local_index) = enclosing.resolve_local_for_upvalue(name) {
+                self.frames[frame_index].insert_local_upvalue(local_index);
+                return Some(local_index);
+            } else if let Some(local_index) = self.resolve_upvalue_aux(name, frame_index - 1) {
+                self.frames[frame_index].insert_nonlocal_upvalue(local_index);
+                return Some(local_index);
             }
         }
+        return None;
     }
 
     fn consume(&mut self, expected: TokenType, msg: Option<String>) -> Result<Line, CompilerError> {
@@ -1212,10 +1209,65 @@ mod tests {
             name: bar_name.clone(),
             arity: 0,
             chunk: bar,
-            upvalues: HashSet::from_iter(vec![UpValue {index: 0, is_local: true}]),
+            upvalues: HashSet::from_iter(vec![UpValue { index: 0, is_local: true }]),
         }, 2);
         foo.write(OpCode::GetLocal(1), 5);
         foo.write(OpCode::Return(2), 5);
+        expected.add_function(Function {
+            name: foo_name.clone(),
+            arity: 1,
+            chunk: foo,
+            upvalues: Default::default(),
+        }, 1);
+        expected.write(OpCode::DefineGlobal(foo_name.clone()), 1);
+        assert_deep_eq!(expected, compiled);
+    }
+
+    #[test]
+    fn basic_closure_deeper() {
+        let compiled = unsafe_compile(vec![
+            "fun foo(x) {",
+            "  fun bar() {",
+            "    fun bazz() {",
+            "      return x;",
+            "    }",
+            "    return bazz;",
+            "  }",
+            "  return bar;",
+            "}",
+        ]);
+
+        let mut expected: Chunk = Chunk::default();
+        let foo_name = expected.intern_string("foo".to_owned());
+        let mut foo: Chunk = Default::default();
+        foo.intern_string("x".to_owned());
+
+        let mut bar = Chunk::default();
+
+        let mut bazz = Chunk::default();
+        bazz.intern_string("x".to_owned());
+        bazz.write(OpCode::GetUpvalue(0), 4);
+        bazz.write(OpCode::Return(0), 4);
+
+        let bazz_name = bar.intern_string("bazz".to_owned());
+        bar.add_function(Function {
+            name: bazz_name.clone(),
+            arity: 0,
+            chunk: bazz,
+            upvalues: HashSet::from_iter(vec![UpValue { index: 0, is_local: false }]),
+        }, 3);
+        bar.write(OpCode::GetLocal(0), 6);
+        bar.write(OpCode::Return(1), 6);
+
+        let bar_name = foo.intern_string("bar".to_owned());
+        foo.add_function(Function {
+            name: bar_name.clone(),
+            arity: 0,
+            chunk: bar,
+            upvalues: HashSet::from_iter(vec![UpValue { index: 0, is_local: true }]),
+        }, 2);
+        foo.write(OpCode::GetLocal(1), 8);
+        foo.write(OpCode::Return(2), 8);
         expected.add_function(Function {
             name: foo_name.clone(),
             arity: 1,
