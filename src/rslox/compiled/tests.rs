@@ -1,10 +1,14 @@
-use std::fmt::Debug;
-use std::ops::Deref;
 use std::rc::Rc;
+use std::ops::Deref;
 
-use crate::rslox::common::tests::unsafe_tokenize;
-use crate::rslox::compiled::chunk::Chunk;
-use crate::rslox::compiled::compiler::compile;
+#[cfg(test)]
+use {
+    std::fmt::Debug,
+
+    crate::rslox::common::tests::unsafe_tokenize,
+    crate::rslox::compiled::chunk::Chunk,
+    crate::rslox::compiled::compiler::compile,
+};
 
 #[cfg(test)]
 pub fn unsafe_compile(program: Vec<&str>) -> Chunk {

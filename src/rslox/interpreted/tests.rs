@@ -1,7 +1,10 @@
-use crate::rslox::common::tests::unsafe_tokenize;
-use crate::rslox::interpreted::annotated_ast::AnnotatedProgram;
-use crate::rslox::interpreted::parser::parse;
-use crate::rslox::interpreted::resolve::resolve;
+#[cfg(test)]
+use {
+  crate::rslox::common::tests::unsafe_tokenize,
+  crate::rslox::interpreted::annotated_ast::AnnotatedProgram,
+  crate::rslox::interpreted::parser::parse,
+  crate::rslox::interpreted::resolve::resolve,
+};
 
 #[cfg(test)]
 pub fn unsafe_parse(program: Vec<&str>) -> AnnotatedProgram {

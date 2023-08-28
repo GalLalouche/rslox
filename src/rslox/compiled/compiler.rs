@@ -759,6 +759,7 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
     result
 }
 
+#[cfg(test)]
 mod tests {
     use std::ops::Deref;
 

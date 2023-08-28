@@ -1,6 +1,9 @@
-use std::fmt::Debug;
+#[cfg(test)]
+use {
+    std::fmt::Debug,
 
-use crate::rslox::common::lexer::{Token, tokenize};
+    crate::rslox::common::lexer::{Token, tokenize},
+};
 
 #[cfg(test)]
 pub fn unsafe_tokenize(program: Vec<&str>) -> Vec<Token> {
