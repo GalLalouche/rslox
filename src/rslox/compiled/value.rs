@@ -24,7 +24,7 @@ pub struct Function {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
-pub struct UpValue {
+pub struct Upvalue {
     pub index: StackLocation,
     pub is_local: bool,
 }

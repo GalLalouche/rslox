@@ -1,6 +1,6 @@
 use crate::rslox::compiled::chunk::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::UpValue;
+use crate::rslox::compiled::value::Upvalue;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
@@ -16,7 +16,7 @@ pub enum OpCode {
     PopN(usize),
     Print,
     Function(ConstantIndex),
-    Upvalues(Vec<UpValue>),
+    Upvalues(Vec<Upvalue>),
     DefineGlobal(InternedString),
     DefineLocal(StackLocation),
     Number(f64),

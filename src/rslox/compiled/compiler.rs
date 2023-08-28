@@ -11,7 +11,7 @@ use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, UpValue};
+use crate::rslox::compiled::value::{Function, Upvalue};
 
 type CompilerError = ParserError;
 
@@ -581,11 +581,11 @@ impl Compiler {
 struct FunctionContext {
     locals: Vec<(InternedString, Depth)>,
     chunk: Chunk,
-    upvalues: HashSet<UpValue>,
+    upvalues: HashSet<Upvalue>,
 }
 
 impl FunctionContext {
-    pub fn finish(mut self, line: Line) -> (Chunk, HashSet<UpValue>) {
+    pub fn finish(mut self, line: Line) -> (Chunk, HashSet<Upvalue>) {
         if self.chunk.get_code().last().iter().any(|e| match &e.0 {
             OpCode::Return(_) => false,
             _ => true,
@@ -625,11 +625,11 @@ impl FunctionContext {
     }
 
     pub fn insert_local_upvalue(&mut self, index: StackLocation) {
-        self.upvalues.insert(UpValue { index, is_local: true });
+        self.upvalues.insert(Upvalue { index, is_local: true });
     }
 
     pub fn insert_nonlocal_upvalue(&mut self, index: StackLocation) {
-        self.upvalues.insert(UpValue { index, is_local: false });
+        self.upvalues.insert(Upvalue { index, is_local: false });
     }
 
     pub fn make_return(&mut self, line: Line) {

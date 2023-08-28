@@ -8,7 +8,7 @@ use crate::rslox::compiled::code::Code;
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::{Function, UpValue};
+use crate::rslox::compiled::value::{Function, Upvalue};
 
 // Overriding for Borrow
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -51,7 +51,7 @@ impl Chunk {
         self.code.swap_last_two_instructions();
     }
     pub fn add_function(
-        &mut self, function: Function, line: Line, upvalues: Vec<UpValue>) -> CodeLocation {
+        &mut self, function: Function, line: Line, upvalues: Vec<Upvalue>) -> CodeLocation {
         let index = self.functions.len();
         let result = self.write(OpCode::Function(index), line);
         self.functions.push(Rc::new(function));
