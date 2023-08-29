@@ -21,7 +21,7 @@ impl Code {
     pub fn swap_last_two_instructions(&mut self) -> () {
         let len = self.0.len();
         assert!(len >= 2);
-        self.0.swap(len -1, len -2);
+        self.0.swap(len - 1, len - 2);
     }
 
     pub fn len(&self) -> usize { self.0.len() }

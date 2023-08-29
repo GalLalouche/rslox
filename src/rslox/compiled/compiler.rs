@@ -33,7 +33,6 @@ struct Compiler {
     current: TokenPointer,
 }
 
-
 impl Compiler {
     pub fn new(tokens: Vec<Token>) -> Self {
         let top_frame = Default::default();
@@ -59,16 +58,12 @@ impl Compiler {
         }
     }
 
-    fn begin_scope(&mut self) {
-        self.depth += 1;
-    }
+    fn begin_scope(&mut self) { self.depth += 1; }
 
     fn end_scope(&mut self, line: Line) {
         assert!(self.depth > 0);
         let amount_to_keep =
-            self.active_locals().iter()
-                .rposition(|e| e.1 != self.depth)
-                .map_or2(|e| e + 1, 0);
+            self.active_locals().iter().rposition(|e| e.1 != self.depth).map_or2(|e| e + 1, 0);
         let amount_to_drop = self.active_locals().len() - amount_to_keep;
         if amount_to_drop == 1 {
             self.write(OpCode::Pop, line);
@@ -158,7 +153,7 @@ impl Compiler {
             self.compile_expression()?;
         }
         self.consume(TokenType::Semicolon, None)?;
-        self.active_frame_mut().make_return(line);
+        self.write(OpCode::Return, line);
         Ok(line)
     }
 
@@ -190,12 +185,11 @@ impl Compiler {
             self.jumping_body(line, 0 as JumpOffset, OpCode::Jump)?;
             // Since we added a Jump, we need to fix the JumpIfFalse target.
             let current_jump = self.active_chunk().get_code().get(jump_pos).unwrap().0.clone();
-            (*self.active_chunk_mut().get_mut(jump_pos).unwrap()).0 =
-                match current_jump {
-                    OpCode::JumpIfFalse(to) => OpCode::JumpIfFalse(to + 1),
-                    e => panic!("Expected JumpIfFalse, was {:?}", e)
-                };
-        } else {}
+            (*self.active_chunk_mut().get_mut(jump_pos).unwrap()).0 = match current_jump {
+                OpCode::JumpIfFalse(to) => OpCode::JumpIfFalse(to + 1),
+                e => panic!("Expected JumpIfFalse, was {:?}", e),
+            };
+        }
         Ok(line)
     }
 
@@ -440,7 +434,7 @@ impl Compiler {
                 TokenType::BangEqual => Right(OpCode::Equals),
                 TokenType::LessEqual => Right(OpCode::Greater),
                 TokenType::GreaterEqual => Right(OpCode::Less),
-                _ => panic!()
+                _ => panic!(),
             };
             match op {
                 Left(OpCode::Call(c)) => {
@@ -529,9 +523,7 @@ impl Compiler {
             Err(CompilerError::new(
                 format!(
                     "Expected {}, but encountered {} at line {}",
-                    expected_msg,
-                    token.r#type,
-                    token.line,
+                    expected_msg, token.r#type, token.line,
                 ),
                 token.to_owned(),
             ))
@@ -587,11 +579,11 @@ struct FunctionContext {
 impl FunctionContext {
     pub fn finish(mut self, line: Line) -> (Chunk, HashSet<Upvalue>) {
         if self.chunk.get_code().last().iter().any(|e| match &e.0 {
-            OpCode::Return(_) => false,
+            OpCode::Return => false,
             _ => true,
         }) {
             self.chunk.write(OpCode::Nil, line);
-            self.make_return(line);
+            self.chunk.write(OpCode::Return, line);
         }
         (self.chunk, self.upvalues)
     }
@@ -630,11 +622,6 @@ impl FunctionContext {
 
     pub fn insert_nonlocal_upvalue(&mut self, index: StackLocation) {
         self.upvalues.insert(Upvalue { index, is_local: false });
-    }
-
-    pub fn make_return(&mut self, line: Line) {
-        let count = self.locals.len();
-        self.chunk.write(OpCode::Return(count), line);
     }
 
     pub fn patch_jump<F: FnOnce(CodeLocation) -> OpCode>(
@@ -715,7 +702,6 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
         );
 
         let command: String = format!("{} {}{}", prefix, op.to_upper_snake(), match op {
-            OpCode::Return(num) => format!("{}", num),
             OpCode::Number(num) => format!("{}", num),
             OpCode::PopN(num) => format!("{}", num),
             OpCode::UnpatchedJump =>
@@ -742,7 +728,7 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
             OpCode::Call(arg_count) => format!("'{}'", arg_count),
             OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
             OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
-            OpCode::Negate | OpCode::Not =>
+            OpCode::Negate | OpCode::Not | OpCode::Return =>
                 "".to_owned(),
         });
         result.push(command);
@@ -776,13 +762,13 @@ mod tests {
     lazy_static! {
         static ref TRIMMER: Regex = Regex::new(r" +\n").unwrap();
     }
-    fn assert_bytecode(
-        code: &str,
-        expected: &str,
-    ) -> () {
+    fn assert_bytecode(code: &str, expected: &str) -> () {
         use pretty_assertions_sorted::assert_eq;
         let string = disassemble(&unsafe_compile(vec![code.trim()])).join("\n");
-        assert_eq!(expected.trim(), TRIMMER.replace_all(string.trim(), "\n"))
+        assert_eq!(
+            expected.trim().lines().collect::<Vec<_>>(),
+            TRIMMER.replace_all(string.trim(), "\n").lines().collect::<Vec<_>>()
+        )
     }
 
     #[test]
@@ -1008,7 +994,7 @@ print areWeHavingItYet;
 00:  2 STRING         'Yes we are!'
 01:  | PRINT
 02:  3 NIL
-03:  | RETURN         0
+03:  | RETURN
 <end areWeHavingItYet>
               "#,
         )
@@ -1035,7 +1021,7 @@ fun areWeHavingItYet() {
 04:  | ADD
 05:  | PRINT
 06:  5 NIL
-07:  | RETURN         2
+07:  | RETURN
 <end areWeHavingItYet>
             "#,
         );
@@ -1060,7 +1046,7 @@ areWeHavingItYet();
 00:  2 STRING         'Yes we are!'
 01:  | PRINT
 02:  3 NIL
-03:  | RETURN         0
+03:  | RETURN
 <end areWeHavingItYet>
             "#,
         )
@@ -1087,7 +1073,7 @@ fun areWeHavingItYet(x, y) {
 05:  | ADD
 06:  | PRINT
 07:  4 NIL
-08:  | RETURN         3
+08:  | RETURN
 <end areWeHavingItYet>
            "#,
         )
@@ -1126,7 +1112,7 @@ areWeHavingItYet(x, z);
 05:  | ADD
 06:  | PRINT
 07:  4 NIL
-08:  | RETURN         3
+08:  | RETURN
 <end areWeHavingItYet>
 "#,
         )
@@ -1147,7 +1133,7 @@ fun foo() {
 00:  2 STRING         'hi'
 01:  | PRINT
 02:  3 NIL
-03:  | RETURN         0
+03:  | RETURN
 <end foo>
             "#,
         )
@@ -1174,7 +1160,7 @@ print plus(10, 20);
 00:  2 GET_LOCAL      0
 01:  | GET_LOCAL      1
 02:  | ADD
-03:  | RETURN         2
+03:  | RETURN
 <end plus>
             "#,
         )
@@ -1200,9 +1186,9 @@ fun foo(x) {
 02:  | GREATER
 03:  | JUMP_IF_FALSE  6
 04:  3 NUMBER         1
-05:  | RETURN         1
+05:  | RETURN
 06:  5 NUMBER         2
-07:  | RETURN         1
+07:  | RETURN
 <end foo>
             "#,
         )
@@ -1226,10 +1212,10 @@ fun foo(x) {
 00:  2 FUNCTION       0
 01:  | UPVALUE        [(0,t)]
 02:  5 GET_LOCAL      1
-03:  | RETURN         2
+03:  | RETURN
 <fun bar>
 00:  3 GET_UPVALUE    '0'
-01:  | RETURN         0
+01:  | RETURN
 <end bar>
 <end foo>
             "#,

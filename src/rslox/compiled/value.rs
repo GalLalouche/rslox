@@ -13,7 +13,8 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Closure(GcWeak<Function>),
+    Closure(GcWeak<Function>, Vec<Upvalue>),
+    Upvalue(GcWeak<Value>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -35,8 +36,9 @@ impl Function {
 
 impl DeepEq for Function {
     fn deep_eq(&self, other: &Self) -> bool {
-        self.name.to_owned() == other.name.to_owned() && self.arity == other.arity &&
-            self.chunk.deep_eq(&other.chunk)
+        self.name.to_owned() == other.name.to_owned()
+            && self.arity == other.arity
+            && self.chunk.deep_eq(&other.chunk)
     }
 }
 
@@ -61,7 +63,7 @@ impl Value {
     }
     pub fn is_function(&self) -> bool {
         match &self {
-            Value::Closure(_) => true,
+            Value::Closure(..) => true,
             _ => false,
         }
     }
@@ -72,7 +74,8 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
-            Value::Closure(f) => f.unwrap_upgrade().stringify(),
+            Value::Closure(f, _) => f.unwrap_upgrade().stringify(),
+            Value::Upvalue(_) => unimplemented!(),
         }
     }
     pub fn is_truthy(&self) -> bool {

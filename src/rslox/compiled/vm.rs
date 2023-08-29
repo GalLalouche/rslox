@@ -1,4 +1,5 @@
 use std::borrow::ToOwned;
+use std::cell::RefMut;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::Write;
@@ -7,12 +8,12 @@ use std::rc::Rc;
 
 use nonempty::NonEmpty;
 
-use crate::rslox::common::utils::{Truncateable, RcRc};
+use crate::rslox::common::utils::{RcRc, Truncateable};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::OpCode;
-use crate::rslox::compiled::value::{Function, Value};
+use crate::rslox::compiled::value::{Function, Upvalue, Value};
 
 type FunctionName = String;
 
@@ -32,7 +33,6 @@ impl VmError {
         self.stack_trace.push_back((function_name, line));
     }
 }
-
 
 #[derive(Debug, Clone)]
 struct VirtualMachine {
@@ -67,7 +67,7 @@ impl VirtualMachine {
                     }
                     return Err(err.clone());
                 }
-                _ => ()
+                _ => (),
             }
         }
         Ok(stack.take())
@@ -84,7 +84,11 @@ impl VirtualMachine {
             ));
         }
         self.frames.last_mut().run(writer).map(|maybe_cf| match maybe_cf {
-            None => { self.frames.pop(); }
+            None => {
+                if let Some(stack_index) = self.frames.pop().map(|f| f.stack_index) {
+                    self.frames.last_mut().stack.borrow_mut().truncate(stack_index);
+                }
+            }
             Some(cf) => self.frames.push(cf),
         })
     }
@@ -136,20 +140,14 @@ impl CallFrame {
                 }}
             }
             match op {
-                OpCode::Return(n) => {
-                    // Patch return value
+                OpCode::Return => {
                     let len = self.stack.borrow().len();
-                    let amount_to_pop = *n + 1;
-                    assert!(amount_to_pop < len, "amount_to_pop: {}, len: {}", amount_to_pop, len);
-                    let result_index = len - 1 - amount_to_pop;
-                    assert!(
-                        self.stack.borrow()[result_index].is_function(),
-                        "Patched index @{} should have been function, was {:?}",
-                        result_index,
-                        self.stack.borrow()[result_index],
-                    );
-                    self.stack.borrow_mut().swap(result_index, len - 1);
-                    self.stack.borrow_mut().popn(amount_to_pop);
+                    // Patch return value
+                    println!("stack: {:?}", self.stack.borrow());
+                    println!("len: {:?}", len);
+                    println!("index: {:?}", self.stack_index);
+                    // self.stack.borrow_mut().swap(self.stack_index - 1, len -1);
+                    self.stack.borrow_mut().swap(self.stack_index - 1, len - 1);
                     self.ip = instructions.len() + 1;
                     return Ok(None);
                 }
@@ -165,8 +163,22 @@ impl CallFrame {
                 }
                 OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
                 OpCode::Function(i) =>
-                    stack.borrow_mut().push(Value::Closure(chunk.get_function(*i))),
-                OpCode::Upvalues(upvalues) => panic!(),
+                    stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Vec::new())),
+                OpCode::Upvalues(upvalues) => {
+                    let last = RefMut::map(stack.borrow_mut(), |s| s.last_mut().unwrap());
+                    match last.deref() {
+                        Value::Closure(_, upv) => {
+                            for Upvalue { index, is_local } in upvalues {
+                                if *is_local {
+                                    panic!()
+                                } else {
+                                    panic!();
+                                }
+                            }
+                        }
+                        e => panic!("Expected function on stack before UPVALUES, found {:?}", e),
+                    };
+                }
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
@@ -233,7 +245,7 @@ impl CallFrame {
                     let func_index = stack.borrow().len() - arg_count - 1;
                     let func = stack.borrow().get(func_index).cloned().unwrap();
                     return match func {
-                        Value::Closure(f) => {
+                        Value::Closure(f, _) => {
                             let arity = f.unwrap_upgrade().arity;
                             if arity != *arg_count {
                                 return Err(self.err(
@@ -317,7 +329,6 @@ impl CallFrame {
     }
 }
 
-
 // Copies all interned data locally.
 #[derive(Debug, Clone, PartialEq)]
 pub enum TracedValue {
@@ -335,14 +346,8 @@ impl From<&Value> for TracedValue {
             Value::Bool(b) => TracedValue::Bool(*b),
             Value::Nil => TracedValue::Nil,
             Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
-            Value::Closure(f_) => {
-                let f = f_.unwrap_upgrade();
-                TracedValue::Function {
-                    name: f.name.to_owned(),
-                    arity: f.arity,
-                    chunk: f.chunk.clone(),
-                }
-            }
+            Value::Closure(..) => panic!("Closures don't have a traced value"),
+            Value::Upvalue(v) => TracedValue::from(v.unwrap_upgrade().deref()),
         }
     }
 }

@@ -1,13 +1,12 @@
-use std::rc::Rc;
 use std::ops::Deref;
+use std::rc::Rc;
 
 #[cfg(test)]
 use {
-    std::fmt::Debug,
-
     crate::rslox::common::tests::unsafe_tokenize,
     crate::rslox::compiled::chunk::Chunk,
     crate::rslox::compiled::compiler::compile,
+    std::fmt::Debug,
 };
 
 #[cfg(test)]
@@ -19,20 +18,20 @@ pub trait DeepEq: PartialEq {
     fn deep_eq(&self, other: &Self) -> bool;
 }
 
-impl <A: DeepEq> DeepEq for Vec<A> {
+impl<A: DeepEq> DeepEq for Vec<A> {
     fn deep_eq(&self, other: &Self) -> bool {
         self.len() == other.len() &&
-        self.into_iter().zip(other.into_iter()).all(|e| e.0.deep_eq(e.1))
+            self.into_iter().zip(other.into_iter()).all(|e| e.0.deep_eq(e.1))
     }
 }
 
-impl <A: DeepEq> DeepEq for Rc<A> {
+impl<A: DeepEq> DeepEq for Rc<A> {
     fn deep_eq(&self, other: &Self) -> bool {
         self.deref().deep_eq(other.deref())
     }
 }
 
-impl <A: DeepEq, B: DeepEq> DeepEq for (A, B) {
+impl<A: DeepEq, B: DeepEq> DeepEq for (A, B) {
     fn deep_eq(&self, other: &Self) -> bool {
         self.0.deep_eq(&other.0) && self.1.deep_eq(&other.1)
     }

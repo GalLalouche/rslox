@@ -4,6 +4,8 @@ use std::fmt::Debug;
 use std::ops::Deref;
 use std::rc::Rc;
 
+use nonempty::NonEmpty;
+
 use crate::rslox::compiled::code::Code;
 use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
@@ -55,8 +57,8 @@ impl Chunk {
         let index = self.functions.len();
         let result = self.write(OpCode::Function(index), line);
         self.functions.push(Rc::new(function));
-        if !upvalues.is_empty() {
-            self.write(OpCode::Upvalues(upvalues), line);
+        if let Some(ne) = NonEmpty::from_vec(upvalues) {
+            self.write(OpCode::Upvalues(ne), line);
         }
         result
     }

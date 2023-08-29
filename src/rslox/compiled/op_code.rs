@@ -1,3 +1,5 @@
+use nonempty::NonEmpty;
+
 use crate::rslox::compiled::chunk::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
 use crate::rslox::compiled::value::Upvalue;
@@ -5,18 +7,19 @@ use crate::rslox::compiled::value::Upvalue;
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
 pub type ConstantIndex = usize;
-pub type LocalCount = usize; // including parameters
+pub type LocalCount = usize;
+// including parameters
 pub type ArgCount = usize;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
-    Return(LocalCount),
+    Return,
     Pop,
     // A more efficient variant of the above, used by function returns.
     PopN(usize),
     Print,
     Function(ConstantIndex),
-    Upvalues(Vec<Upvalue>),
+    Upvalues(NonEmpty<Upvalue>),
     DefineGlobal(InternedString),
     DefineLocal(StackLocation),
     Number(f64),
@@ -67,7 +70,7 @@ impl DeepEq for OpCode {
 impl OpCode {
     pub fn to_upper_snake(&self) -> String {
         format!("{:15}", match self {
-            OpCode::Return(_) => "RETURN",
+            OpCode::Return => "RETURN",
             OpCode::Pop => "POP",
             OpCode::PopN(_) => "POP_N",
             OpCode::Print => "PRINT",
