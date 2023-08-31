@@ -397,8 +397,12 @@ mod tests {
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
 
-    fn single_error(lines: Vec<&str>) -> VmError {
-        VirtualMachine::run(unsafe_compile(lines), &mut sink()).unwrap_err()
+    fn assert_printed(code: &str, expected: &str) {
+        assert_eq!(printed_string(vec![code]), expected)
+    }
+
+    fn single_error(code: &str) -> VmError {
+        VirtualMachine::run(unsafe_compile(vec![code.trim()]), &mut sink()).unwrap_err()
     }
 
     #[test]
@@ -434,9 +438,7 @@ mod tests {
     #[test]
     fn basic_run_time_error() {
         assert_eq!(
-            single_error(vec![
-                "-false;",
-            ]).stack_trace.unwrap_single().1,
+            single_error("-false;").stack_trace.unwrap_single().1,
             1,
         )
     }
@@ -513,12 +515,7 @@ mod tests {
 
     #[test]
     fn string_concat() {
-        assert_eq!(
-            printed_string(vec![
-                r#"print "abc" + "def";"#,
-            ]),
-            "abcdef",
-        )
+        assert_printed(r#"print "abc" + "def";"#, "abcdef")
     }
 
     #[test]
@@ -529,380 +526,354 @@ mod tests {
 
     #[test]
     fn basic_variable_access() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 4;",
-                "print x;",
-            ]),
-            "4",
+        assert_printed(r#"
+var x = 4;
+print x;
+"#,
+                       "4",
         )
     }
 
     #[test]
     fn global_variable_redeclaration() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 4;",
-                "print x;",
-                "var x = 2;",
-                "print x;",
-            ]),
-            "42",
+        assert_printed(r#"
+var x = 4;
+print x;
+var x = 2;
+print x;
+"#,
+                       "42",
         )
     }
 
     #[test]
     fn global_variable_assignment() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 4;",
-                "print x;",
-                "x = 2;",
-                "print x;",
-            ]),
-            "42",
+        assert_printed(r#"
+var x = 4;
+print x;
+x = 2;
+print x;
+        "#,
+                       "42",
         )
     }
 
     #[test]
     fn local_variable_assignment() {
-        assert_eq!(
-            printed_string(vec![
-                "{",
-                "  var x = 4;",
-                "  print x;",
-                "  x = 2;",
-                "  print x;",
-                "}",
-            ]),
-            "42",
+        assert_printed(r#"
+{
+  var x = 4;
+  print x;
+  x = 2;
+  print x;
+}
+        "#,
+                       "42",
         )
     }
 
     #[test]
     fn chaining_assignment() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 1;",
-                "{",
-                "  var y = 2;",
-                "  var z = 3;",
-                "  y = x = z = 4;",
-                "  print x;",
-                "  print y;",
-                "  print z;",
-                "}",
-            ]),
-            "444",
+        assert_printed(r#"
+var x = 1;
+{
+  var y = 2;
+  var z = 3;
+  y = x = z = 4;
+  print x;
+  print y;
+  print z;
+}
+        "#,
+                       "444",
         )
     }
 
     #[test]
     fn local_variables() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "{",
-                "  var x = 4;",
-                "  print x;",
-                "}",
-                "print x;",
-            ]),
-            "42",
+        assert_printed(r#"
+var x = 2;
+{
+  var x = 4;
+  print x;
+}
+print x;
+        "#,
+                       "42",
         )
     }
 
     #[test]
     fn get_local_order() {
-        assert_eq!(
-            printed_string(vec![
-                "{",
-                "  var x = 1;",
-                "  var y = 2;",
-                "  var z = 3;",
-                "  print x;",
-                "  print y;",
-                "  print z;",
-                "}",
-            ]),
-            "123",
+        assert_printed(r#"
+{
+  var x = 1;
+  var y = 2;
+  var z = 3;
+  print x;
+  print y;
+  print z;
+}
+        "#,
+                       "123",
         )
     }
 
     #[test]
     fn get_global_order() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 1;",
-                "var y = 2;",
-                "var z = 3;",
-                "print x;",
-                "print y;",
-                "print z;",
-            ]),
-            "123",
+        assert_printed(r#"
+var x = 1;
+var y = 2;
+var z = 3;
+print x;
+print y;
+print z;
+        "#,
+                       "123",
         )
     }
 
     #[test]
     fn local_variable_order_operation() {
-        assert_eq!(
-            printed_string(vec![
-                "{",
-                "  var x = 1;",
-                "  var y = 2;",
-                "  print x - y;",
-                "}",
-            ]),
-            "-1",
+        assert_printed(r#"
+{
+  var x = 1;
+  var y = 2;
+  print x - y;
+}
+        "#,
+                       "-1",
         )
     }
 
     #[test]
     fn if_true_no_else() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "if (x) {",
-                "  print 42;",
-                "}",
-            ]),
-            "42",
+        assert_printed(r#"
+var x = 2;
+if (x) {
+  print 42;
+}
+        "#,
+                       "42",
         )
     }
 
     #[test]
     fn if_false_no_else() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "if (!x)",
-                "  print 42;",
-                "",
-            ]),
-            "",
+        assert_printed(r#"
+var x = 2;
+if (!x)
+  print 42;
+
+        "#,
+                       "",
         )
     }
 
     #[test]
     fn if_true_else() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "if (x) {",
-                "  print 42;",
-                "} else",
-                "  print 2;",
-            ]),
-            "42",
+        assert_printed(r#"
+var x = 2;
+if (x) {
+  print 42;
+} else
+  print 2;
+        "#,
+                       "42",
         )
     }
 
     #[test]
     fn multi_line_if() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "if (x) {",
-                "  y = 42;",
-                "  z = x + y;",
-                "  print z * 3;",
-                "}",
-                "z = 15;",
-                "print z * x;",
-            ]),
-            "13230",
+        assert_printed(r#"
+var x = 2;
+if (x) {
+  y = 42;
+  z = x + y;
+  print z * 3;
+}
+z = 15;
+print z * x;
+        "#,
+                       "13230",
         )
     }
 
     #[test]
     fn multi_line_if_false() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "if (x < 0) {",
-                "  y = 42;",
-                "  z = x + y;",
-                "  print z * 3;",
-                "}",
-                "z = 15;",
-                "print z * x;",
-            ]),
-            "30",
+        assert_printed(r#"
+var x = 2;
+if (x < 0) {
+  y = 42;
+  z = x + y;
+  print z * 3;
+}
+z = 15;
+print z * x;
+        "#,
+                       "30",
         )
     }
 
     #[test]
     fn if_false_else() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 2;",
-                "if (!x)",
-                "  print 42;",
-                "else { print 54; }",
-            ]),
-            "54",
+        assert_printed(r#"
+var x = 2;
+if (!x)
+  print 42;
+else { print 54; }
+        "#,
+                       "54",
         )
     }
 
     #[test]
     fn while_loop() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 0;",
-                "while (x < 3) {",
-                "  print x;",
-                "  x = x + 1;",
-                "}",
-            ]),
-            "012",
+        assert_printed(r#"
+var x = 0;
+while (x < 3) {
+  print x;
+  x = x + 1;
+}
+        "#,
+                       "012",
         )
     }
 
     #[test]
     fn for_loop() {
-        assert_eq!(
-            printed_string(vec![
-                "for (var x = 0; x < 3; x = x + 1) {",
-                "  print x;",
-                "}",
-            ]),
-            "012",
+        assert_printed(r#"
+for (var x = 0; x < 3; x = x + 1) {
+  print x;
+}
+        "#,
+                       "012",
         )
     }
 
     #[test]
     fn for_loop_no_init() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 0;",
-                "for (; x < 3; x = x + 1) {",
-                "  print x;",
-                "}",
-            ]),
-            "012",
+        assert_printed(r#"
+var x = 0;
+for (; x < 3; x = x + 1) {
+  print x;
+}
+        "#,
+                       "012",
         )
     }
 
     #[test]
     fn for_loop_no_post() {
-        assert_eq!(
-            printed_string(vec![
-                "for (var x = 0; x < 3;) {",
-                "  print x;",
-                "  x = x + 1;",
-                "}",
-            ]),
-            "012",
+        assert_printed(r#"
+for (var x = 0; x < 3;) {
+  print x;
+  x = x + 1;
+}
+        "#,
+                       "012",
         )
     }
 
     #[test]
     fn for_loop_no_init_no_post() {
-        assert_eq!(
-            printed_string(vec![
-                "var x = 0;",
-                "for (;x < 3;) {",
-                "  print x;",
-                "  x = x + 1;",
-                "}",
-            ]),
-            "012",
+        assert_printed(r#"
+var x = 0;
+for (;x < 3;) {
+  print x;
+  x = x + 1;
+}
+        "#,
+                       "012",
         )
     }
 
     #[test]
     fn printing_a_function_value() {
-        assert_eq!(
-            printed_string(vec![
-                "fun areWeHavingItYet() {",
-                "  print \"Yes we are!\";",
-                "}",
-                "print areWeHavingItYet;",
-            ]),
-            "<fn areWeHavingItYet>",
+        assert_printed(r#"
+fun areWeHavingItYet() {
+  print "Yes we are!";
+}
+print areWeHavingItYet;
+        "#,
+                       "<fn areWeHavingItYet>",
         )
     }
 
     #[test]
     fn calling_a_function() {
-        assert_eq!(
-            printed_string(vec![
-                "fun areWeHavingItYet() {",
-                "  print \"Yes we are!\";",
-                "}",
-                "areWeHavingItYet();",
-            ]),
-            "Yes we are!",
+        assert_printed(r#"
+fun areWeHavingItYet() {
+  print "Yes we are!";
+}
+areWeHavingItYet();
+        "#,
+                       "Yes we are!",
         )
     }
 
     #[test]
     fn calling_a_function_with_local_computation() {
-        assert_eq!(
-            printed_string(vec![
-                "fun areWeHavingItYet() {",
-                "  var x = 1;",
-                "  var y = 2;",
-                "  print x + y;",
-                "}",
-                "areWeHavingItYet();",
-            ]),
-            "3",
+        assert_printed(r#"
+fun areWeHavingItYet() {
+  var x = 1;
+  var y = 2;
+  print x + y;
+}
+areWeHavingItYet();
+        "#,
+                       "3",
         )
     }
 
     #[test]
     fn nested_functions() {
-        assert_eq!(
-            printed_string(vec![
-                "fun areWeHavingItYet() {",
-                "  fun one() {",
-                "    var x = 1;",
-                "    var y = 2;",
-                "    print x + y;",
-                "  }",
-                "  fun two() {",
-                "    var x = 10;",
-                "    var y = 20;",
-                "    print x * y;",
-                "  }",
-                "  one();",
-                "  two();",
-                "}",
-                "areWeHavingItYet();",
-            ]),
-            "3200",
+        assert_printed(r#"
+fun areWeHavingItYet() {
+  fun one() {
+    var x = 1;
+    var y = 2;
+    print x + y;
+  }
+  fun two() {
+    var x = 10;
+    var y = 20;
+    print x * y;
+  }
+  one();
+  two();
+}
+areWeHavingItYet();
+        "#,
+                       "3200",
         )
     }
 
     #[test]
     fn calling_a_function_with_arguments() {
-        assert_eq!(
-            printed_string(vec![
-                "fun areWeHavingItYet(x, y) {",
-                "  var z = \"3\";",
-                "  print x + y + z;",
-                "}",
-                "var x = \"1\";",
-                "var z = \"2\";",
-                "areWeHavingItYet(x, z);",
-            ]),
-            "123",
+        assert_printed(r#"
+fun areWeHavingItYet(x, y) {
+  var z = "3";
+  print x + y + z;
+}
+var x = "1";
+var z = "2";
+areWeHavingItYet(x, z);
+        "#,
+                       "123",
         )
     }
 
     #[test]
     fn user_error_on_not_enough_arguments() {
         assert_eq!(
-            single_error(
-                vec![
-                    "fun areWeHavingItYet(x, y) {",
-                    "  var z = \"3\";",
-                    "  print x + y + z;",
-                    "}",
-                    "areWeHavingItYet();",
-                ]).stack_trace.unwrap_single().1,
+            single_error(r#"
+fun areWeHavingItYet(x, y) {
+  var z = "3";
+  print x + y + z;
+}
+areWeHavingItYet();
+"#).stack_trace.unwrap_single().1,
             5,
         )
     }
@@ -910,13 +881,12 @@ mod tests {
     #[test]
     fn user_error_on_stack_overflow() {
         assert_eq!(
-            single_error(
-                vec![
-                    "fun foo() {",
-                    "  foo();",
-                    "}",
-                    "foo();",
-                ]).msg,
+            single_error(r#"
+fun foo() {
+  foo();
+}
+foo();
+"#).msg,
             "Stack overflow! Wheeeee!".to_owned(),
         )
     }
@@ -924,14 +894,14 @@ mod tests {
     #[test]
     fn prints_stack_trace_on_error() {
         let err = single_error(
-            vec![
-                "fun a() { b(); }",
-                "fun b() { c(); }",
-                "fun c() {",
-                "  c(\"too\", \"many\");",
-                "}",
-                "a();",
-            ]);
+            r#"
+fun a() { b(); }
+fun b() { c(); }
+fun c() {
+  c("too", "many");
+}
+a();
+"#);
         assert_eq!(err.msg, "Expected 0 arguments but got 2");
         let vec: Vec<(FunctionName, Line)> = Vec::from(err.stack_trace.deref().clone());
         assert_eq_vec!(
@@ -947,186 +917,174 @@ mod tests {
 
     #[test]
     fn manual_factorial() {
-        assert_eq!(
-            printed_string(vec![
-                "fun a(x) {",
-                "  return x * b(x - 1);",
-                "}",
-                "fun b(x) {",
-                "  return x * c(x - 1);",
-                "}",
-                "fun c(x) {",
-                "  return 1;",
-                "}",
-                "print a(2);",
-            ]),
-            "2",
+        assert_printed(r#"
+fun a(x) {
+  return x * b(x - 1);
+}
+fun b(x) {
+  return x * c(x - 1);
+}
+fun c(x) {
+  return 1;
+}
+print a(2);
+        "#,
+                       "2",
         )
     }
 
     #[test]
     fn functions_calling_functions_calling_functions_hard() {
-        assert_eq!(
-            printed_string(vec![
-                "fun a(x) {",
-                "  b(x + x, x * x);",
-                "  b(x - x, x / x);",
-                "}",
-                "fun b(x, y) {",
-                "  c(x * y, x + y, x - y);",
-                "  c(x, y, x / y);",
-                "}",
-                "fun c(x, y, z) {",
-                "  print x;",
-                "  print y;",
-                "  print z;",
-                "}",
-                "a(1);",
-            ]),
-            "23121201-1010",
+        assert_printed(r#"
+fun a(x) {
+  b(x + x, x * x);
+  b(x - x, x / x);
+}
+fun b(x, y) {
+  c(x * y, x + y, x - y);
+  c(x, y, x / y);
+}
+fun c(x, y, z) {
+  print x;
+  print y;
+  print z;
+}
+a(1);
+        "#,
+                       "23121201-1010",
         )
     }
 
     #[test]
     fn implicit_function_return() {
-        assert_eq!(
-            printed_string(vec![
-                "fun a(x) {",
-                "  print x * x;",
-                "}",
-                "print a(16);",
-            ]),
-            "256nil",
+        assert_printed(r#"
+fun a(x) {
+  print x * x;
+}
+print a(16);
+        "#,
+                       "256nil",
         )
     }
 
     #[test]
     fn implicit_function_return2() {
-        assert_eq!(
-            printed_string(vec![
-                "fun a(x) {",
-                "  print x * x;",
-                "}",
-                "res = a(16);",
-                "print res;",
-            ]),
-            "256nil",
+        assert_printed(r#"
+fun a(x) {
+  print x * x;
+}
+res = a(16);
+print res;
+        "#,
+                       "256nil",
         )
     }
 
     #[test]
     fn basic_explicit_return() {
-        assert_eq!(
-            printed_string(vec![
-                "fun plus() {",
-                "  return 42;",
-                "}",
-                "print plus();",
-            ]),
-            "42",
+        assert_printed(r#"
+fun plus() {
+  return 42;
+}
+print plus();
+        "#,
+                       "42",
         )
     }
 
     #[test]
     fn basic_explicit_return_with_args() {
-        assert_eq!(
-            printed_string(vec![
-                "fun plus(x, y) {",
-                "  return x + y;",
-                "}",
-                "print plus(10, 20);",
-            ]),
-            "30",
+        assert_printed(r#"
+fun plus(x, y) {
+  return x + y;
+}
+print plus(10, 20);
+        "#,
+                       "30",
         )
     }
 
     #[test]
     fn factorial_0() {
-        assert_eq!(
-            printed_string(vec![
-                "fun factorial(x) {",
-                "  if (x == 0) {return 1;}",
-                "  else {return x * factorial(x - 1);}",
-                "}",
-                "print factorial(0);",
-            ]),
-            "1",
+        assert_printed(r#"
+fun factorial(x) {
+  if (x == 0) {return 1;}
+  else {return x * factorial(x - 1);}
+}
+print factorial(0);
+        "#,
+                       "1",
         )
     }
 
     #[test]
     fn factorial_1() {
-        assert_eq!(
-            printed_string(vec![
-                "fun factorial(x) {",
-                "  if (x == 0) {return 1;}",
-                "  else {return x * factorial(x - 1);}",
-                "}",
-                "print factorial(1);",
-            ]),
-            "1",
+        assert_printed(r#"
+fun factorial(x) {
+  if (x == 0) {return 1;}
+  else {return x * factorial(x - 1);}
+}
+print factorial(1);
+        "#,
+                       "1",
         )
     }
 
     #[test]
     fn factorial_5() {
-        assert_eq!(
-            printed_string(vec![
-                "fun factorial(x) {",
-                "  if (x == 0) {return 1;}",
-                "  else {return x * factorial(x - 1);}",
-                "}",
-                "print factorial(5);",
-            ]),
-            "120",
+        assert_printed(r#"
+fun factorial(x) {
+  if (x == 0) {return 1;}
+  else {return x * factorial(x - 1);}
+}
+print factorial(5);
+        "#,
+                       "120",
         )
     }
 
     #[test]
     fn factorial_5_early_exit() {
-        assert_eq!(
-            printed_string(vec![
-                "fun factorial(x) {",
-                "  if (x == 0) {",
-                "    return 1;",
-                "  }",
-                "  return x * factorial(x - 1);",
-                "}",
-                "print factorial(5);",
-            ]),
-            "120",
+        assert_printed(r#"
+fun factorial(x) {
+  if (x == 0) {
+    return 1;
+  }
+  return x * factorial(x - 1);
+}
+print factorial(5);
+        "#,
+                       "120",
         )
     }
 
     #[test]
     fn fib() {
-        assert_eq!(
-            printed_string(vec![
-                "fun fib(x) {",
-                "  if (x < 2) {return x;}",
-                "  return fib(x - 1) + fib(x - 2);",
-                "}",
-                "print fib(10);",
-            ]),
-            "55",
+        assert_printed(r#"
+fun fib(x) {
+  if (x < 2) {return x;}
+  return fib(x - 1) + fib(x - 2);
+}
+print fib(10);
+        "#,
+                       "55",
         )
     }
 
     #[test]
     fn functions_returning_functions_no_closure() {
-        assert_eq!(
-            printed_string(vec![
-                "fun f() {",
-                "  print \"f1\";",
-                "  fun g() {",
-                "    print \"g\";",
-                "  }",
-                "  print \"f2\";",
-                "  return g;",
-                "}",
-                "f()();",
-            ]),
-            "f1f2g",
+        assert_printed(r#"
+fun f() {
+  print "f1";
+  fun g() {
+    print "g";
+  }
+  print "f2";
+  return g;
+}
+f()();
+        "#,
+                       "f1f2g",
         )
     }
 }
