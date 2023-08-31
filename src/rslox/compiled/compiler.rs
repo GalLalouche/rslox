@@ -1,10 +1,8 @@
-use std::collections::HashSet;
 use std::mem;
 
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
-use option_ext::OptionExt;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
 use crate::rslox::common::lexer::{Token, TokenType};
@@ -62,17 +60,27 @@ impl Compiler {
 
     fn end_scope(&mut self, line: Line) {
         assert!(self.depth > 0);
-        let amount_to_keep =
-            self.active_locals().iter().rposition(|e| e.depth != self.depth).map_or2(|e| e + 1, 0);
-        let amount_to_drop = self.active_locals().len() - amount_to_keep;
-        if amount_to_drop == 1 {
-            self.write(OpCode::Pop, line);
-            self.active_locals_mut().pop().unwrap();
-        } else if amount_to_drop > 0 {
-            self.write(OpCode::PopN(amount_to_drop), line);
-            self.active_locals_mut().truncate(amount_to_keep);
+        let mut pop_n_counter = 0;
+        while self.active_locals().last().iter().any(|l| l.depth == self.depth) {
+            let local = self.active_locals_mut().pop().unwrap();
+            if local.is_captured {
+                self.write_pop(pop_n_counter, line);
+                pop_n_counter = 0;
+                self.write(OpCode::CloseUpvalue, line);
+            } else {
+                pop_n_counter += 1;
+            }
         }
+        self.write_pop(pop_n_counter, line);
         self.depth -= 1;
+    }
+
+    fn write_pop(&mut self, amount: usize, line: Line) {
+        if amount == 1 {
+            self.write(OpCode::Pop, line);
+        } else if amount > 1 {
+            self.write(OpCode::PopN(amount), line);
+        }
     }
 
     fn synchronize(&mut self) {
@@ -314,7 +322,8 @@ impl Compiler {
         }?;
         let interned = self.intern_string(name);
         if self.depth > 0 {
-            self.active_locals_mut().push(Local {name: interned.clone(), depth: UNINITIALIZED});
+            self.active_locals_mut().push(
+                Local { name: interned.clone(), depth: UNINITIALIZED, is_captured: false });
         }
         Ok((interned, line))
     }
@@ -325,7 +334,7 @@ impl Compiler {
             Ok(())
         } else {
             // Skipping the first element because that is the current (uninitialized) local.
-            for Local {name: local_name, depth} in self.active_locals().iter().rev().skip(1) {
+            for Local { name: local_name, depth, .. } in self.active_locals().iter().rev().skip(1) {
                 if depth < &self.depth {
                     break;
                 }
@@ -499,11 +508,13 @@ impl Compiler {
         }
         if let Some(enclosing) = self.frames.get_mut(frame_index - 1) {
             if let Some(local_index) = enclosing.resolve_local_for_upvalue(name) {
-                self.frames[frame_index].insert_local_upvalue(local_index);
-                return Some(local_index);
+                return Some(
+                    self.frames[frame_index].insert_upvalue(
+                        Upvalue { index: local_index, is_local: true }));
             } else if let Some(local_index) = self.resolve_upvalue_aux(name, frame_index - 1) {
-                self.frames[frame_index].insert_nonlocal_upvalue(local_index);
-                return Some(local_index);
+                return Some(
+                    self.frames[frame_index].insert_upvalue(
+                        Upvalue { index: local_index, is_local: false }));
             }
         }
         return None;
@@ -573,17 +584,18 @@ impl Compiler {
 struct Local {
     name: InternedString,
     depth: Depth,
+    is_captured: bool,
 }
 
 #[derive(Debug, Default)]
 struct FunctionContext {
     locals: Vec<Local>,
     chunk: Chunk,
-    upvalues: HashSet<Upvalue>,
+    upvalues: Vec<Upvalue>,
 }
 
 impl FunctionContext {
-    pub fn finish(mut self, line: Line) -> (Chunk, HashSet<Upvalue>) {
+    pub fn finish(mut self, line: Line) -> (Chunk, Vec<Upvalue>) {
         if self.chunk.get_code().last().iter().any(|e| match &e.0 {
             OpCode::Return => false,
             _ => true,
@@ -596,7 +608,7 @@ impl FunctionContext {
 
     pub fn resolve_local(
         &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
-        for (i, Local { name: local_name, depth}) in self.locals.iter().enumerate() {
+        for (i, Local { name: local_name, depth, .. }) in self.locals.iter().enumerate() {
             if depth == &UNINITIALIZED {
                 return Err(CompilerError::new(
                     format!(
@@ -611,23 +623,23 @@ impl FunctionContext {
         return Ok(None);
     }
 
-    pub fn resolve_local_for_upvalue(&self, name: &InternedString) -> Option<StackLocation> {
-        for (i, Local { name: local_name, depth}) in self.locals.iter().enumerate() {
+    pub fn resolve_local_for_upvalue(&mut self, name: &InternedString) -> Option<StackLocation> {
+        for (i, Local { name: local_name, depth, .. }) in self.locals.iter().enumerate() {
             assert_ne!(depth, &UNINITIALIZED);
             if name.compare_values(local_name) {
                 assert_ne!(name, local_name);
+                self.locals[i].is_captured = true;
                 return Some(i);
             }
         }
         None
     }
 
-    pub fn insert_local_upvalue(&mut self, index: StackLocation) {
-        self.upvalues.insert(Upvalue { index, is_local: true });
-    }
-
-    pub fn insert_nonlocal_upvalue(&mut self, index: StackLocation) {
-        self.upvalues.insert(Upvalue { index, is_local: false });
+    pub fn insert_upvalue(&mut self, upvalue: Upvalue) -> StackLocation {
+        self.upvalues.iter().position(|e| *e == upvalue).unwrap_or_else(|| {
+            self.upvalues.push(upvalue);
+            self.upvalues.len() - 1
+        })
     }
 
     pub fn patch_jump<F: FnOnce(CodeLocation) -> OpCode>(
@@ -719,7 +731,8 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
                 "[{}]",
                 upvalues.iter()
                     .map(|e| format!("({},{})", e.index, if e.is_local { "t" } else { "f" }))
-                    .collect::<Vec<_>>().join(",")
+                    .collect::<Vec<_>>()
+                    .join(","),
             ),
             OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
             OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
@@ -734,7 +747,7 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
             OpCode::Call(arg_count) => format!("'{}'", arg_count),
             OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
             OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
-            OpCode::Negate | OpCode::Not | OpCode::Return =>
+            OpCode::Negate | OpCode::Not | OpCode::CloseUpvalue | OpCode::Return =>
                 "".to_owned(),
         });
         result.push(command);
@@ -1258,6 +1271,111 @@ fun foo(x) {
 <fun bazz>
 00:  4 GET_UPVALUE    '0'
 01:  | RETURN
+<end bazz>
+<end bar>
+<end foo>
+            "#,
+        )
+    }
+
+    #[test]
+    fn close_upvalue_and_popn() {
+        assert_bytecode(
+            r#"
+{
+    var a = 1;
+    var b = 2;
+    var c = 3;
+    var d = 4;
+    fun foo() {
+        print b + c;
+    }
+}
+           "#,
+            r#"
+00:  2 NUMBER         1
+01:  3 NUMBER         2
+02:  4 NUMBER         3
+03:  5 NUMBER         4
+04:  6 FUNCTION       0
+05:  | UPVALUE        [(1,t),(2,t)]
+06:  9 POP_N          2
+07:  | CLOSE_UPVALUE
+08:  | CLOSE_UPVALUE
+09:  | POP
+<fun foo>
+00:  7 GET_UPVALUE    '0'
+01:  | GET_UPVALUE    '1'
+02:  | ADD
+03:  | PRINT
+04:  8 NIL
+05:  | RETURN
+<end foo>"#,
+        )
+    }
+
+    #[test]
+    fn referencing_the_same_upvalue_multiple_times() {
+        assert_bytecode(
+            r#"
+{
+    var x = 1;
+    fun foo() {
+        print x + x;
+    }
+}
+           "#,
+            r#"
+00:  2 NUMBER         1
+01:  3 FUNCTION       0
+02:  | UPVALUE        [(0,t)]
+03:  6 POP
+04:  | CLOSE_UPVALUE
+<fun foo>
+00:  4 GET_UPVALUE    '0'
+01:  | GET_UPVALUE    '0'
+02:  | ADD
+03:  | PRINT
+04:  5 NIL
+05:  | RETURN
+<end foo>"#,
+        )
+    }
+
+    #[test]
+    fn close_nested_upvalue() {
+        assert_bytecode(
+            r#"
+fun foo(x) {
+    fun bar(y) {
+        fun bazz() {
+            print x + y;
+        }
+        return bazz;
+    }
+    return bar;
+}
+            "#,
+            r#"
+00:  1 FUNCTION       0
+01:  | DEFINE_GLOBAL  'foo'
+<fun foo>
+00:  2 FUNCTION       0
+01:  | UPVALUE        [(0,t)]
+02:  8 GET_LOCAL      1
+03:  | RETURN
+<fun bar>
+00:  3 FUNCTION       0
+01:  | UPVALUE        [(0,f),(0,t)]
+02:  6 GET_LOCAL      1
+03:  | RETURN
+<fun bazz>
+00:  4 GET_UPVALUE    '0'
+01:  | GET_UPVALUE    '1'
+02:  | ADD
+03:  | PRINT
+04:  5 NIL
+05:  | RETURN
 <end bazz>
 <end bar>
 <end foo>

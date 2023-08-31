@@ -164,6 +164,7 @@ impl CallFrame {
                 OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
                 OpCode::Function(i) =>
                     stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Vec::new())),
+                OpCode::CloseUpvalue => unimplemented!(),
                 OpCode::Upvalues(upvalues) => {
                     let last = RefMut::map(stack.borrow_mut(), |s| s.last_mut().unwrap());
                     match last.deref() {
