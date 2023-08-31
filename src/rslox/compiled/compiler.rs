@@ -63,7 +63,7 @@ impl Compiler {
     fn end_scope(&mut self, line: Line) {
         assert!(self.depth > 0);
         let amount_to_keep =
-            self.active_locals().iter().rposition(|e| e.1 != self.depth).map_or2(|e| e + 1, 0);
+            self.active_locals().iter().rposition(|e| e.depth != self.depth).map_or2(|e| e + 1, 0);
         let amount_to_drop = self.active_locals().len() - amount_to_keep;
         if amount_to_drop == 1 {
             self.write(OpCode::Pop, line);
@@ -314,7 +314,7 @@ impl Compiler {
         }?;
         let interned = self.intern_string(name);
         if self.depth > 0 {
-            self.active_locals_mut().push((interned.clone(), UNINITIALIZED));
+            self.active_locals_mut().push(Local {name: interned.clone(), depth: UNINITIALIZED});
         }
         Ok((interned, line))
     }
@@ -325,7 +325,7 @@ impl Compiler {
             Ok(())
         } else {
             // Skipping the first element because that is the current (uninitialized) local.
-            for (local_name, depth) in self.active_locals().iter().rev().skip(1) {
+            for Local {name: local_name, depth} in self.active_locals().iter().rev().skip(1) {
                 if depth < &self.depth {
                     break;
                 }
@@ -341,7 +341,7 @@ impl Compiler {
                     });
                 }
             }
-            assert_eq!(self.active_locals().last().unwrap().0, name);
+            assert_eq!(self.active_locals().last().unwrap().name, name);
             self.mark_initialized();
             Ok(())
         }
@@ -350,7 +350,7 @@ impl Compiler {
     fn mark_initialized(&mut self) {
         // No need to initialize globals.
         if self.depth != 0 {
-            self.active_locals_mut().last_mut().unwrap().1 = self.depth;
+            self.active_locals_mut().last_mut().unwrap().depth = self.depth;
         }
     }
 
@@ -483,8 +483,8 @@ impl Compiler {
     fn active_chunk(&self) -> &Chunk { &self.active_frame().chunk }
     fn active_chunk_mut(&mut self) -> &mut Chunk { &mut self.active_frame_mut().chunk }
 
-    fn active_locals(&self) -> &Vec<(InternedString, Depth)> { &self.active_frame().locals }
-    fn active_locals_mut(&mut self) -> &mut Vec<(InternedString, Depth)> {
+    fn active_locals(&self) -> &Vec<Local> { &self.active_frame().locals }
+    fn active_locals_mut(&mut self) -> &mut Vec<Local> {
         &mut self.active_frame_mut().locals
     }
 
@@ -569,9 +569,15 @@ impl Compiler {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct Local {
+    name: InternedString,
+    depth: Depth,
+}
+
 #[derive(Debug, Default)]
 struct FunctionContext {
-    locals: Vec<(InternedString, Depth)>,
+    locals: Vec<Local>,
     chunk: Chunk,
     upvalues: HashSet<Upvalue>,
 }
@@ -590,7 +596,7 @@ impl FunctionContext {
 
     pub fn resolve_local(
         &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
-        for (i, (local_name, depth)) in self.locals.iter().enumerate() {
+        for (i, Local { name: local_name, depth}) in self.locals.iter().enumerate() {
             if depth == &UNINITIALIZED {
                 return Err(CompilerError::new(
                     format!(
@@ -606,7 +612,7 @@ impl FunctionContext {
     }
 
     pub fn resolve_local_for_upvalue(&self, name: &InternedString) -> Option<StackLocation> {
-        for (i, (local_name, depth)) in self.locals.iter().enumerate() {
+        for (i, Local { name: local_name, depth}) in self.locals.iter().enumerate() {
             assert_ne!(depth, &UNINITIALIZED);
             if name.compare_values(local_name) {
                 assert_ne!(name, local_name);
@@ -1243,15 +1249,15 @@ fun foo(x) {
 00:  2 FUNCTION       0
 01:  | UPVALUE        [(0,t)]
 02:  8 GET_LOCAL      1
-03:  | RETURN         2
+03:  | RETURN
 <fun bar>
 00:  3 FUNCTION       0
 01:  | UPVALUE        [(0,f)]
 02:  6 GET_LOCAL      0
-03:  | RETURN         1
+03:  | RETURN
 <fun bazz>
 00:  4 GET_UPVALUE    '0'
-01:  | RETURN         0
+01:  | RETURN
 <end bazz>
 <end bar>
 <end foo>
