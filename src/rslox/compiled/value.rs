@@ -1,10 +1,10 @@
 use std::borrow::BorrowMut;
 use std::convert::TryFrom;
 use std::ops::Deref;
-use std::rc::Rc;
 
+use crate::rslox::common::utils::RcRc;
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
-use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
 
@@ -14,10 +14,11 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Closure(GcWeak<Function>, Rc<Vec<GcWeak<Value>>>),
-    UpvaluePtr(GcWeak<Value>),
-    OpenUpvalue(Rc<Value>),
+    Closure(GcWeak<Function>, RcRc<Vec<GcWeakMut<Value>>>),
+    UpvaluePtr(GcWeakMut<Value>),
+    OpenUpvalue(RcRc<Value>),
 }
+
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
@@ -77,8 +78,8 @@ impl Value {
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
             Value::Closure(f, _) => f.unwrap_upgrade().stringify(),
-            Value::UpvaluePtr(value)=> value.unwrap_upgrade().stringify(),
-            Value::OpenUpvalue(value) => value.stringify(),
+            Value::UpvaluePtr(value) => value.unwrap_upgrade().borrow().stringify(),
+            Value::OpenUpvalue(value) => value.borrow().stringify(),
         }
     }
     pub fn is_truthy(&self) -> bool {
@@ -91,25 +92,38 @@ impl Value {
             _ => false,
         }
     }
-}
-
-impl<'a> TryFrom<&'a Value> for &'a f64 {
-    type Error = String;
-
-    fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
-        match &value {
-            Value::Number(f) => Ok(&f),
-            e => Err(format!("Expected Value::Number, but found {:?}", e)),
+    pub fn is_upvalue_ptr(&self) -> bool {
+        match self {
+            Value::UpvaluePtr(_) => true,
+            _ => false,
+        }
+    }
+    pub fn upvalue_ptr(value: GcWeakMut<Value>) -> Self {
+        assert!(!value.unwrap_upgrade().borrow().is_upvalue_ptr());
+        Value::UpvaluePtr(value)
+    }
+    /** Returns true if succeeded. */
+    #[must_use]
+    pub fn update_number(&mut self, n: f64) -> bool {
+        match self {
+            v @ Value::Number(_) => {
+                let _ = std::mem::replace(v, Value::Number(n));
+                true
+            }
+            Value::UpvaluePtr(v) =>
+                v.unwrap_upgrade().deref().borrow_mut().update_number(n),
+            _ => false
         }
     }
 }
 
-impl<'a> TryFrom<&'a mut Value> for &'a mut f64 {
+impl TryFrom<&Value> for f64 {
     type Error = String;
 
-    fn try_from(value: &'a mut Value) -> Result<Self, Self::Error> {
-        match value.borrow_mut() {
-            Value::Number(f) => Ok(f),
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match &value {
+            Value::Number(f) => Ok(*f),
+            Value::UpvaluePtr(v) => Self::try_from(v.unwrap_upgrade().borrow().deref()),
             e => Err(format!("Expected Value::Number, but found {:?}", e)),
         }
     }

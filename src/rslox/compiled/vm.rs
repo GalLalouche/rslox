@@ -7,10 +7,10 @@ use std::rc::Rc;
 
 use nonempty::NonEmpty;
 
-use crate::rslox::common::utils::{RcRc, Truncateable};
+use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
-use crate::rslox::compiled::gc::GcWeak;
+use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::OpCode;
 use crate::rslox::compiled::value::{Function, Upvalue, Value};
 
@@ -52,7 +52,7 @@ impl VirtualMachine {
             ip: 0,
             function: GcWeak::from(&script),
             stack_index: 0,
-            upvalues: GcWeak::from(&Rc::new(Vec::new())),
+            upvalues: GcWeakMut::from(&rcrc(Vec::new())),
             stack: stack.clone(),
             globals: globals.clone(),
         };
@@ -107,7 +107,7 @@ struct CallFrame {
     ip: InstructionPointer,
     function: GcWeak<Function>,
     stack: RcRc<Vec<Value>>,
-    upvalues: GcWeak<Vec<GcWeak<Value>>>,
+    upvalues: GcWeakMut<Vec<GcWeakMut<Value>>>,
     globals: RcRc<HashMap<String, Value>>,
     stack_index: usize,
 }
@@ -135,9 +135,9 @@ impl CallFrame {
             macro_rules! binary {
                 ($l:tt) => {{
                     let v1 = self.try_number(
-                        &stack.borrow_mut().pop().unwrap(), stringify!($l), &line)?;
-                    *(self.try_number_mut(
-                        stack.borrow_mut().last_mut().unwrap(), stringify!($l), &line))? $l v1;
+                        &stack.borrow_mut().pop().unwrap(), stringify!($l), *line)?;
+                    self.try_number_mut(
+                        stack.borrow_mut().last_mut().unwrap(), stringify!($l), *line, |n| n $l v1)
                 }}
             }
             match op {
@@ -166,15 +166,15 @@ impl CallFrame {
                         if *is_local {
                             let existing = std::mem::replace(
                                 &mut self.stack.borrow_mut()[fixed_index], Value::Nil);
-                            let rc1 = Rc::new(existing);
-                            self.stack.borrow_mut()[fixed_index] = Value::OpenUpvalue(rc1.clone());
-                            upvalues_ptrs.push(GcWeak::from(&rc1));
+                            let rc = rcrc(existing);
+                            self.stack.borrow_mut()[fixed_index] = Value::OpenUpvalue(rc.clone());
+                            upvalues_ptrs.push(GcWeakMut::from(&rc));
                         } else {
-                            panic!();
+                            todo!()
                         }
                     }
                     stack.borrow_mut().push(
-                        Value::Closure(chunk.get_function(*i), Rc::new(upvalues_ptrs)));
+                        Value::Closure(chunk.get_function(*i), rcrc(upvalues_ptrs)));
                 }
                 OpCode::CloseUpvalue => { /* TODO */ }
                 OpCode::UnpatchedJump =>
@@ -203,11 +203,15 @@ impl CallFrame {
                     let value = stack.borrow().last().cloned().unwrap();
                     globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
                 }
-                OpCode::GetUpvalue(index) => {
+                OpCode::GetUpvalue(index) =>
                     stack.borrow_mut().push(
-                        Value::UpvaluePtr(self.upvalues.unwrap_upgrade()[*index].clone()));
+                        Value::upvalue_ptr(self.upvalues.unwrap_upgrade().borrow()[*index].clone())),
+
+                OpCode::SetUpvalue(index) => {
+                    // We don't pop on assignment, to allow for chaining.
+                    let value = stack.borrow().last().cloned().unwrap();
+                    self.upvalues.unwrap_upgrade().borrow_mut()[*index].unwrap_upgrade().replace(value);
                 }
-                OpCode::SetUpvalue(index) => panic!(),
                 OpCode::DefineLocal(index) =>
                     (*stack.borrow_mut().get_mut(*index).unwrap()) =
                         stack.borrow().last().unwrap().clone(),
@@ -216,7 +220,7 @@ impl CallFrame {
                     stack.borrow_mut().push(value)
                 }
                 OpCode::SetLocal(index) => {
-                    // We not pop on assignment, to allow for chaining.
+                    // We don't pop on assignment, to allow for chaining.
                     let value = stack.borrow().last().cloned().unwrap();
                     *stack.borrow_mut().get_mut(*index + self.stack_index).unwrap() = value.clone();
                 }
@@ -230,16 +234,16 @@ impl CallFrame {
                 }
                 OpCode::Greater => {
                     let v1 = self.try_number(
-                        &stack.borrow_mut().pop().unwrap(), "Greater lhs", &line)?;
+                        &stack.borrow_mut().pop().unwrap(), "Greater lhs", *line)?;
                     let v2 = self.try_number(
-                        &stack.borrow().last().cloned().unwrap(), "Greater rhs", &line)?;
+                        &stack.borrow().last().cloned().unwrap(), "Greater rhs", *line)?;
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 > v1);
                 }
                 OpCode::Less => {
                     let v1 = self.try_number(
-                        &stack.borrow_mut().pop().unwrap(), "Less lhs", &line)?;
+                        &stack.borrow_mut().pop().unwrap(), "Less lhs", *line)?;
                     let v2 = self.try_number(
-                        &stack.borrow().last().cloned().unwrap(), "Less rhs", &line)?;
+                        &stack.borrow().last().cloned().unwrap(), "Less rhs", *line)?;
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 < v1);
                 }
                 OpCode::Call(arg_count) => {
@@ -283,16 +287,13 @@ impl CallFrame {
                             format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
                         *(stack.borrow_mut().last_mut().unwrap()) = Value::String(result.into());
                     } else {
-                        binary!(+=)
+                        binary!(+)?
                     },
-                OpCode::Subtract => binary!(-=),
-                OpCode::Multiply => binary!(*=),
-                OpCode::Divide => binary!(/=),
-                OpCode::Negate => {
-                    *self.try_number_mut(
-                        stack.borrow_mut().last_mut().unwrap(), "Negate", &line,
-                    )? *= -1.0;
-                }
+                OpCode::Subtract => binary!(-)?,
+                OpCode::Multiply => binary!(*)?,
+                OpCode::Divide => binary!(/)?,
+                OpCode::Negate => self.try_number_mut(
+                    stack.borrow_mut().last_mut().unwrap(), "Negate", *line, |v| v * -1.0)?,
                 OpCode::Not => {
                     let result = stack.borrow().last().unwrap().is_falsey();
                     *stack.borrow_mut().last_mut().unwrap() = Value::Bool(result)
@@ -307,19 +308,24 @@ impl CallFrame {
         VmError::new(msg, self.function.unwrap_upgrade().name.to_owned(), line)
     }
 
-    fn try_number(&self, value: &Value, msg: &str, line: &Line) -> Result<f64, VmError> {
-        let f: &f64 =
-            value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), *line))?;
-        Ok(*f)
+    fn try_number(&self, value: &Value, msg: &str, line: Line) -> Result<f64, VmError> {
+        value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), line))
     }
 
-    fn try_number_mut<'a>(
+    fn try_number_mut(
         &self,
-        value: &'a mut Value,
+        value: &mut Value,
         msg: &str,
-        line: &Line,
-    ) -> Result<&'a mut f64, VmError> {
-        value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), *line))
+        line: Line,
+        f: impl FnOnce(f64) -> f64,
+    ) -> Result<(), VmError> {
+        let n = value.deref().try_into()
+            .map_err(|err: String| self.err(format!("{} ({})", err, msg), line))?;
+        if value.update_number(f(n)) {
+            Ok(())
+        } else {
+            Result::Err(self.err(format!("Expected number, but got {:?}", value), line))
+        }
     }
 
     fn _debug_stack(&self) -> () {
@@ -1102,6 +1108,22 @@ f()();
 }
         "#,
                        "42",
+        )
+    }
+
+    #[test]
+    fn basic_function_set_closure() {
+        assert_printed(r#"
+{
+  var x = 42;
+  fun foo() {
+    x = 1;
+  }
+  foo();
+  print x;
+}
+        "#,
+                       "1",
         )
     }
 
