@@ -134,10 +134,9 @@ impl CallFrame {
             let (op, line) = instructions.get(self.ip).unwrap();
             macro_rules! binary {
                 ($l:tt) => {{
-                    let v1 = self.try_number(
-                        &stack.borrow_mut().pop().unwrap(), stringify!($l), *line)?;
-                    self.try_number_mut(
-                        stack.borrow_mut().last_mut().unwrap(), stringify!($l), *line, |n| n $l v1)
+                    let v1 =
+                        self.try_number(&stack.borrow_mut().pop().unwrap(), stringify!($l), *line)?;
+                    self.update_top_number(stringify!($l), *line, |n| n $l v1)
                 }}
             }
             match op {
@@ -248,32 +247,24 @@ impl CallFrame {
                 }
                 OpCode::Call(arg_count) => {
                     let func_index = stack.borrow().len() - arg_count - 1;
-                    let func = stack.borrow().get(func_index).cloned().unwrap();
-                    return match func {
-                        Value::Closure(f, upv) => {
-                            let arity = f.unwrap_upgrade().arity;
-                            if arity != *arg_count {
-                                return Err(self.err(
-                                    format!("Expected {} arguments but got {}", arity, arg_count),
-                                    *line));
-                            }
-                            let frame = CallFrame {
-                                ip: 0,
-                                function: f,
-                                stack_index: stack.borrow().len() - arity,
-                                upvalues: (&upv).into(),
-                                stack: stack.clone(),
-                                globals: globals.clone(),
-                            };
-                            self.ip += 1;
-                            Ok(Some(frame))
-                        }
-                        v => {
-                            Err(self.err(
-                                format!("Expected function, but got '{}'", v.stringify()),
-                                *line))
-                        }
-                    };
+                    let value = stack.borrow().get(func_index).cloned().unwrap();
+                    let (function, upvalues): (GcWeak<Function>, GcWeakMut<Vec<GcWeakMut<Value>>>) =
+                        (&value).try_into().map_err(|err: String| self.err(err, *line))?;
+                    let arity = function.unwrap_upgrade().arity;
+                    if arity != *arg_count {
+                        return Err(self.err(
+                            format!("Expected {} arguments but got {}", arity, arg_count),
+                            *line));
+                    }
+                    self.ip += 1;
+                    return Ok(Some(CallFrame {
+                        ip: 0,
+                        function,
+                        stack_index: stack.borrow().len() - arity,
+                        upvalues,
+                        stack: stack.clone(),
+                        globals: globals.clone(),
+                    }));
                 }
                 OpCode::Add =>
                     if stack.borrow().last().unwrap().is_string() {
@@ -292,8 +283,7 @@ impl CallFrame {
                 OpCode::Subtract => binary!(-)?,
                 OpCode::Multiply => binary!(*)?,
                 OpCode::Divide => binary!(/)?,
-                OpCode::Negate => self.try_number_mut(
-                    stack.borrow_mut().last_mut().unwrap(), "Negate", *line, |v| v * -1.0)?,
+                OpCode::Negate => self.update_top_number("Negate", *line, |v| v * -1.0)?,
                 OpCode::Not => {
                     let result = stack.borrow().last().unwrap().is_falsey();
                     *stack.borrow_mut().last_mut().unwrap() = Value::Bool(result)
@@ -312,20 +302,17 @@ impl CallFrame {
         value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), line))
     }
 
-    fn try_number_mut(
-        &self,
-        value: &mut Value,
+    // Updates the to value of the stack to be the new number.
+    fn update_top_number(
+        &mut self,
         msg: &str,
         line: Line,
         f: impl FnOnce(f64) -> f64,
     ) -> Result<(), VmError> {
-        let n = value.deref().try_into()
+        let n = self.stack.borrow().last().unwrap().try_into()
             .map_err(|err: String| self.err(format!("{} ({})", err, msg), line))?;
-        if value.update_number(f(n)) {
-            Ok(())
-        } else {
-            Result::Err(self.err(format!("Expected number, but got {:?}", value), line))
-        }
+        *self.stack.borrow_mut().last_mut().unwrap() = Value::Number(f(n));
+        Ok(())
     }
 
     fn _debug_stack(&self) -> () {
@@ -1124,6 +1111,22 @@ f()();
 }
         "#,
                        "1",
+        )
+    }
+
+    #[test]
+    fn basic_function_set_from_get_closure() {
+        assert_printed(r#"
+{
+  var x = 42;
+  fun foo() {
+    x = x + 1;
+  }
+  foo();
+  print x;
+}
+        "#,
+                       "43",
         )
     }
 

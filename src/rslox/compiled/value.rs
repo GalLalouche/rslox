@@ -102,19 +102,6 @@ impl Value {
         assert!(!value.unwrap_upgrade().borrow().is_upvalue_ptr());
         Value::UpvaluePtr(value)
     }
-    /** Returns true if succeeded. */
-    #[must_use]
-    pub fn update_number(&mut self, n: f64) -> bool {
-        match self {
-            v @ Value::Number(_) => {
-                let _ = std::mem::replace(v, Value::Number(n));
-                true
-            }
-            Value::UpvaluePtr(v) =>
-                v.unwrap_upgrade().deref().borrow_mut().update_number(n),
-            _ => false
-        }
-    }
 }
 
 impl TryFrom<&Value> for f64 {
@@ -125,6 +112,17 @@ impl TryFrom<&Value> for f64 {
             Value::Number(f) => Ok(*f),
             Value::UpvaluePtr(v) => Self::try_from(v.unwrap_upgrade().borrow().deref()),
             e => Err(format!("Expected Value::Number, but found {:?}", e)),
+        }
+    }
+}
+
+impl TryFrom<&Value> for (GcWeak<Function>, GcWeakMut<Vec<GcWeakMut<Value>>>) {
+    type Error = String;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match &value {
+            Value::Closure(f, uv) => Ok((f.clone(), uv.into())),
+            e => Err(format!("Expected Value::Closure, but found {:?}", e)),
         }
     }
 }
