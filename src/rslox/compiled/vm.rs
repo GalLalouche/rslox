@@ -1,5 +1,4 @@
 use std::borrow::ToOwned;
-use std::cell::RefMut;
 use std::collections::{HashMap, VecDeque};
 use std::convert::TryInto;
 use std::io::Write;
@@ -53,6 +52,7 @@ impl VirtualMachine {
             ip: 0,
             function: GcWeak::from(&script),
             stack_index: 0,
+            upvalues: GcWeak::from(&Rc::new(Vec::new())),
             stack: stack.clone(),
             globals: globals.clone(),
         };
@@ -107,6 +107,7 @@ struct CallFrame {
     ip: InstructionPointer,
     function: GcWeak<Function>,
     stack: RcRc<Vec<Value>>,
+    upvalues: GcWeak<Vec<GcWeak<Value>>>,
     globals: RcRc<HashMap<String, Value>>,
     stack_index: usize,
 }
@@ -143,10 +144,6 @@ impl CallFrame {
                 OpCode::Return => {
                     let len = self.stack.borrow().len();
                     // Patch return value
-                    println!("stack: {:?}", self.stack.borrow());
-                    println!("len: {:?}", len);
-                    println!("index: {:?}", self.stack_index);
-                    // self.stack.borrow_mut().swap(self.stack_index - 1, len -1);
                     self.stack.borrow_mut().swap(self.stack_index - 1, len - 1);
                     self.ip = instructions.len() + 1;
                     return Ok(None);
@@ -162,24 +159,24 @@ impl CallFrame {
                     write!(writer, "{}", expr.stringify()).expect("Not written");
                 }
                 OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
-                OpCode::Function(i) =>
-                    stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Vec::new())),
-                OpCode::CloseUpvalue => unimplemented!(),
-                OpCode::Upvalues(upvalues) => {
-                    let last = RefMut::map(stack.borrow_mut(), |s| s.last_mut().unwrap());
-                    match last.deref() {
-                        Value::Closure(_, upv) => {
-                            for Upvalue { index, is_local } in upvalues {
-                                if *is_local {
-                                    panic!()
-                                } else {
-                                    panic!();
-                                }
-                            }
+                OpCode::Function(i, upvalues) => {
+                    let mut upvalues_ptrs = Vec::new();
+                    for Upvalue { index, is_local } in upvalues {
+                        let fixed_index = self.stack_index + *index;
+                        if *is_local {
+                            let existing = std::mem::replace(
+                                &mut self.stack.borrow_mut()[fixed_index], Value::Nil);
+                            let rc1 = Rc::new(existing);
+                            self.stack.borrow_mut()[fixed_index] = Value::OpenUpvalue(rc1.clone());
+                            upvalues_ptrs.push(GcWeak::from(&rc1));
+                        } else {
+                            panic!();
                         }
-                        e => panic!("Expected function on stack before UPVALUES, found {:?}", e),
-                    };
+                    }
+                    stack.borrow_mut().push(
+                        Value::Closure(chunk.get_function(*i), Rc::new(upvalues_ptrs)));
                 }
+                OpCode::CloseUpvalue => { /* TODO */ }
                 OpCode::UnpatchedJump =>
                     panic!("Jump should have been patched at line: '{}'", line),
                 OpCode::JumpIfFalse(index) => {
@@ -206,7 +203,10 @@ impl CallFrame {
                     let value = stack.borrow().last().cloned().unwrap();
                     globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
                 }
-                OpCode::GetUpvalue(index) => panic!(),
+                OpCode::GetUpvalue(index) => {
+                    stack.borrow_mut().push(
+                        Value::UpvaluePtr(self.upvalues.unwrap_upgrade()[*index].clone()));
+                }
                 OpCode::SetUpvalue(index) => panic!(),
                 OpCode::DefineLocal(index) =>
                     (*stack.borrow_mut().get_mut(*index).unwrap()) =
@@ -246,7 +246,7 @@ impl CallFrame {
                     let func_index = stack.borrow().len() - arg_count - 1;
                     let func = stack.borrow().get(func_index).cloned().unwrap();
                     return match func {
-                        Value::Closure(f, _) => {
+                        Value::Closure(f, upv) => {
                             let arity = f.unwrap_upgrade().arity;
                             if arity != *arg_count {
                                 return Err(self.err(
@@ -257,6 +257,7 @@ impl CallFrame {
                                 ip: 0,
                                 function: f,
                                 stack_index: stack.borrow().len() - arity,
+                                upvalues: (&upv).into(),
                                 stack: stack.clone(),
                                 globals: globals.clone(),
                             };
@@ -331,40 +332,6 @@ impl CallFrame {
 }
 
 // Copies all interned data locally.
-#[derive(Debug, Clone, PartialEq)]
-pub enum TracedValue {
-    Number(f64),
-    Bool(bool),
-    Nil,
-    String(String),
-    Function { name: String, arity: usize, chunk: Chunk },
-}
-
-impl From<&Value> for TracedValue {
-    fn from(v: &Value) -> Self {
-        match v {
-            Value::Number(n) => TracedValue::Number(*n),
-            Value::Bool(b) => TracedValue::Bool(*b),
-            Value::Nil => TracedValue::Nil,
-            Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
-            Value::Closure(..) => panic!("Closures don't have a traced value"),
-            Value::Upvalue(v) => TracedValue::from(v.unwrap_upgrade().deref()),
-        }
-    }
-}
-
-impl TracedValue {
-    pub fn _string<S: Into<String>>(str: S) -> Self {
-        TracedValue::String(str.into())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-struct TracedCommand {
-    assembly: String,
-    stack_state: Vec<TracedValue>,
-}
-
 #[cfg(test)]
 mod tests {
     use std::io::{Cursor, sink};
@@ -375,6 +342,41 @@ mod tests {
     use crate::rslox::compiled::tests::unsafe_compile;
 
     use super::*;
+
+    #[derive(Debug, Clone, PartialEq)]
+    pub enum TracedValue {
+        Number(f64),
+        Bool(bool),
+        Nil,
+        String(String),
+    }
+
+    impl From<&Value> for TracedValue {
+        fn from(v: &Value) -> Self {
+            match v {
+                Value::Number(n) => TracedValue::Number(*n),
+                Value::Bool(b) => TracedValue::Bool(*b),
+                Value::Nil => TracedValue::Nil,
+                Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
+                Value::Closure(..) => panic!("Closures don't have a traced value"),
+                Value::UpvaluePtr(..) => panic!("Upvalues don't have a traced value"),
+                Value::OpenUpvalue(..) => panic!("Upvalues don't have a traced value"),
+            }
+        }
+    }
+
+    impl TracedValue {
+        pub fn _string<S: Into<String>>(str: S) -> Self {
+            TracedValue::String(str.into())
+        }
+    }
+
+    #[derive(Debug, Clone, PartialEq)]
+    struct TracedCommand {
+        assembly: String,
+        stack_state: Vec<TracedValue>,
+    }
+
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
         let mut compiled = unsafe_compile(lines);
@@ -1085,6 +1087,36 @@ fun f() {
 f()();
         "#,
                        "f1f2g",
+        )
+    }
+
+    #[test]
+    fn basic_function_closure() {
+        assert_printed(r#"
+{
+  var x = 42;
+  fun foo() {
+    print x;
+  }
+  foo();
+}
+        "#,
+                       "42",
+        )
+    }
+
+    #[test]
+    fn nested_function_closure() {
+        assert_printed(r#"
+fun foo(x) {
+  fun bar() {
+    print x;
+  }
+  bar();
+}
+foo(42);
+        "#,
+                       "42",
         )
     }
 }

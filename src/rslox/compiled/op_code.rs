@@ -1,5 +1,3 @@
-use nonempty::NonEmpty;
-
 use crate::rslox::compiled::chunk::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
 use crate::rslox::compiled::value::Upvalue;
@@ -7,7 +5,6 @@ use crate::rslox::compiled::value::Upvalue;
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
 pub type ConstantIndex = usize;
-pub type LocalCount = usize;
 // including parameters
 pub type ArgCount = usize;
 
@@ -18,9 +15,8 @@ pub enum OpCode {
     // A more efficient variant of the above, used by function returns.
     PopN(usize),
     Print,
-    Function(ConstantIndex),
+    Function(ConstantIndex, Vec<Upvalue>),
     CloseUpvalue,
-    Upvalues(NonEmpty<Upvalue>),
     DefineGlobal(InternedString),
     DefineLocal(StackLocation),
     Number(f64),
@@ -75,9 +71,8 @@ impl OpCode {
             OpCode::Pop => "POP",
             OpCode::PopN(_) => "POP_N",
             OpCode::Print => "PRINT",
-            OpCode::Function(_) => "FUNCTION",
+            OpCode::Function(..) => "FUNCTION",
             OpCode::CloseUpvalue => "CLOSE_UPVALUE",
-            OpCode::Upvalues(_) => "UPVALUE",
             OpCode::DefineGlobal(_) => "DEFINE_GLOBAL",
             OpCode::DefineLocal(_) => "DEFINE_LOCAL",
             OpCode::Number(_) => "NUMBER",

@@ -1,6 +1,7 @@
 use std::borrow::BorrowMut;
 use std::convert::TryFrom;
 use std::ops::Deref;
+use std::rc::Rc;
 
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::GcWeak;
@@ -13,8 +14,9 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Closure(GcWeak<Function>, Vec<Upvalue>),
-    Upvalue(GcWeak<Value>),
+    Closure(GcWeak<Function>, Rc<Vec<GcWeak<Value>>>),
+    UpvaluePtr(GcWeak<Value>),
+    OpenUpvalue(Rc<Value>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -75,7 +77,8 @@ impl Value {
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.unwrap_upgrade().to_string(),
             Value::Closure(f, _) => f.unwrap_upgrade().stringify(),
-            Value::Upvalue(_) => unimplemented!(),
+            Value::UpvaluePtr(value)=> value.unwrap_upgrade().stringify(),
+            Value::OpenUpvalue(value) => value.stringify(),
         }
     }
     pub fn is_truthy(&self) -> bool {
