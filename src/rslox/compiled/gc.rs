@@ -24,6 +24,8 @@ impl<A> GcWeakMut<A> {
     pub fn unwrap_upgrade(&self) -> RcRc<A> {
         self.0.upgrade().expect("GcWeakMut value was already collected")
     }
+
+    pub fn null() -> Self { GcWeakMut(Weak::new()) }
 }
 
 impl<A: Eq> GcWeak<A> {
