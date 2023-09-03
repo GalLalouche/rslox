@@ -4,7 +4,7 @@ use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
 
-use crate::rslox::common::error::{convert_errors, LoxResult, ParserError, ToNonEmpty};
+use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
@@ -12,6 +12,10 @@ use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocat
 use crate::rslox::compiled::value::{Function, Upvalue};
 
 type CompilerError = ParserError;
+
+impl From<CompilerError> for NonEmpty<CompilerError> {
+    fn from(value: CompilerError) -> Self { NonEmpty::new(value) }
+}
 
 pub fn compile(tokens: Vec<Token>) -> LoxResult<Chunk> {
     convert_errors(Compiler::new(tokens).compile())
@@ -134,11 +138,11 @@ impl Compiler {
 
     fn statement(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
         let line = if let Some(line) = self.matches(TokenType::Print) {
-            self.compile_expression().to_nonempty()?;
+            self.compile_expression()?;
             self.write(OpCode::Print, line);
             line
         } else if let Some(line) = self.matches(TokenType::Return) {
-            return self.return_stmt(line).to_nonempty();
+            return self.return_stmt(line).map_err(|e| e.into());
         } else if let Some(line) = self.matches(TokenType::If) {
             return self.if_stmt(line); // Skips semicolon
         } else if let Some(line) = self.matches(TokenType::While) {
@@ -148,9 +152,9 @@ impl Compiler {
         } else if let Some(_) = self.matches(TokenType::OpenBrace) {
             return self.block();
         } else {
-            self.expression_statement().to_nonempty()?
+            self.expression_statement()?
         };
-        self.consume(TokenType::Semicolon, None).to_nonempty()?;
+        self.consume(TokenType::Semicolon, None)?;
         Ok(line)
     }
 
@@ -177,7 +181,7 @@ impl Compiler {
         while !self.is_at_end() && self.peek_type() != &TokenType::CloseBrace {
             self.declaration(&mut errors);
         }
-        let ending_line = self.consume(TokenType::CloseBrace, None).to_nonempty()?;
+        let ending_line = self.consume(TokenType::CloseBrace, None)?;
         match NonEmpty::from_vec(errors) {
             None => Ok(ending_line),
             Some(errs) => Err(errs),
@@ -185,9 +189,9 @@ impl Compiler {
     }
 
     fn if_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
-        self.consume(TokenType::OpenParen, None).to_nonempty()?;
-        self.compile_expression().to_nonempty()?;
-        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenParen, None)?;
+        self.compile_expression()?;
+        self.consume(TokenType::CloseParen, None)?;
         let jump_pos = self.jumping_body(line, 0 as JumpOffset, OpCode::JumpIfFalse)?;
         if let Some(line) = self.matches(TokenType::Else) {
             self.jumping_body(line, 0 as JumpOffset, OpCode::Jump)?;
@@ -202,25 +206,25 @@ impl Compiler {
     }
 
     fn while_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
-        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenParen, None)?;
         let body_start = self.active_chunk().get_code().next_location();
-        self.compile_expression().to_nonempty()?;
-        self.consume(TokenType::CloseParen, None).to_nonempty()?;
+        self.compile_expression()?;
+        self.consume(TokenType::CloseParen, None)?;
         self.jumping_body(line, 1 as JumpOffset, OpCode::JumpIfFalse)?;
         self.write(OpCode::Jump(body_start), line);
         Ok(line)
     }
 
     fn for_stmt(&mut self, line: Line) -> Result<Line, NonEmpty<CompilerError>> {
-        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenParen, None)?;
         // Initializer
         self.begin_scope();
         if self.matches(TokenType::Semicolon).is_some() {
             Ok(())
         } else if self.matches(TokenType::Var).is_some() {
-            self.declare_variable(true as CanAssign).to_nonempty()
+            self.declare_variable(true as CanAssign)
         } else {
-            self.expression_statement().to_nonempty().map(|_| ())
+            self.expression_statement().map(|_| ())
         }?;
         // Condition
         let body_start = self.active_chunk().get_code().next_location();
@@ -228,8 +232,8 @@ impl Compiler {
             if self.matches(TokenType::Semicolon).is_some() {
                 None
             } else {
-                self.compile_expression().to_nonempty()?;
-                self.consume(TokenType::Semicolon, None).to_nonempty()?;
+                self.compile_expression()?;
+                self.consume(TokenType::Semicolon, None)?;
                 Some(self.write(OpCode::UnpatchedJump, line))
             };
         // Increment
@@ -239,12 +243,12 @@ impl Compiler {
             } else {
                 let jump_over_increment = self.write(OpCode::UnpatchedJump, line);
                 let result = self.active_chunk().get_code().next_location();
-                self.compile_expression().to_nonempty()?;
+                self.compile_expression()?;
                 self.write(OpCode::Pop, line);
                 self.write(OpCode::Jump(body_start), line);
                 self.active_frame_mut().patch_jump(
                     jump_over_increment, 0 as JumpOffset, OpCode::Jump);
-                self.consume(TokenType::CloseParen, None).to_nonempty()?;
+                self.consume(TokenType::CloseParen, None)?;
                 Ok(Some(result))
             }?;
         self.statement()?;
@@ -268,24 +272,24 @@ impl Compiler {
     }
 
     fn declare_function(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
-        let (name, line) = self.parse_variable().to_nonempty()?;
+        let (name, line) = self.parse_variable()?;
         self.mark_initialized();
         let mut arity = 0;
         self.depth += 1;
         self.frames.push(FunctionContext::default());
-        self.consume(TokenType::OpenParen, None).to_nonempty()?;
+        self.consume(TokenType::OpenParen, None)?;
         if self.peek_type() != &TokenType::CloseParen {
             loop {
                 arity += 1;
-                let (var_name, line) = self.parse_variable().to_nonempty()?;
-                self.define_variable(var_name, line).to_nonempty()?;
+                let (var_name, line) = self.parse_variable()?;
+                self.define_variable(var_name, line)?;
                 if self.matches(TokenType::Comma).is_none() {
                     break;
                 }
             }
         }
-        self.consume(TokenType::CloseParen, None).to_nonempty()?;
-        self.consume(TokenType::OpenBrace, None).to_nonempty()?;
+        self.consume(TokenType::CloseParen, None)?;
+        self.consume(TokenType::OpenBrace, None)?;
         // Functions don't explicitly clean up after themselves; instead, each return statement
         // knows how many elements to drop from the call stack.
         let end_line = self.multi_statements()?;
@@ -293,7 +297,7 @@ impl Compiler {
         self.depth -= 1;
         let function = Function { name: name.clone(), arity, chunk };
         self.active_chunk_mut().add_function(function, line, upvalues.into_iter().collect());
-        self.define_variable(name, line).to_nonempty()?;
+        self.define_variable(name, line)?;
         Ok(end_line)
     }
 

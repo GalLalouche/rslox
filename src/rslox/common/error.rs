@@ -1,5 +1,7 @@
 use std::fmt::Debug;
+
 use nonempty::NonEmpty;
+
 use crate::rslox::common::lexer::Token;
 
 pub trait LoxError: Debug {
@@ -45,15 +47,5 @@ impl LoxError for ParserError {
 
     fn get_message(&self) -> String {
         self.message.to_owned()
-    }
-}
-
-pub trait ToNonEmpty<B> {
-    fn to_nonempty(self) -> B;
-}
-
-impl <A, Err> ToNonEmpty<Result<A, NonEmpty<Err>>> for Result<A, Err> {
-    fn to_nonempty(self) -> Result<A, NonEmpty<Err>> {
-        self.map_err(NonEmpty::new)
     }
 }
