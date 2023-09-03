@@ -4,7 +4,7 @@ use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
 
-use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
+use crate::rslox::common::error::{LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
@@ -17,8 +17,9 @@ impl From<CompilerError> for NonEmpty<CompilerError> {
     fn from(value: CompilerError) -> Self { NonEmpty::new(value) }
 }
 
+#[cfg(test)]
 pub fn compile(tokens: Vec<Token>) -> LoxResult<Chunk> {
-    convert_errors(Compiler::new(tokens).compile())
+    crate::rslox::common::error::convert_errors(Compiler::new(tokens).compile())
 }
 
 type Depth = i64;
@@ -87,6 +88,8 @@ impl Compiler {
         }
     }
 
+    // Consumes all the tokens until the next "synchronization" point, so we can report as many
+    // errors as possible.
     fn synchronize(&mut self) {
         while !self.is_at_end() && !self.matches(TokenType::Semicolon).is_some() {
             let should_continue = match self.peek_type() {
