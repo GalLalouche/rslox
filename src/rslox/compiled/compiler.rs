@@ -65,8 +65,7 @@ impl Compiler {
         assert!(self.depth > 0);
         let mut pop_n_counter = 0;
         while self.active_locals().last().iter().any(|l| l.depth == self.depth) {
-            let local = self.active_locals_mut().pop().unwrap();
-            if local.is_captured {
+            if self.active_locals_mut().pop().unwrap().is_captured {
                 self.write_pop(pop_n_counter, line);
                 pop_n_counter = 0;
                 self.write(OpCode::CloseUpvalue, line);
@@ -100,13 +99,6 @@ impl Compiler {
     }
 
     fn declaration(&mut self, errors: &mut Vec<CompilerError>) -> Option<Line> {
-        macro_rules! push_single {
-            ($e:ident) => {{
-                errors.push($e);
-                self.synchronize();
-                None
-            }};
-        }
         if let Some(_) = self.matches(TokenType::Fun) {
             match self.declare_function() {
                 Ok(l) => Some(l),
@@ -121,7 +113,11 @@ impl Compiler {
         } else if let Some(line) = self.matches(TokenType::Var) {
             match self.declare_variable(true as CanAssign) {
                 Ok(_) => Some(line),
-                Err(e) => push_single!(e),
+                Err(e) => {
+                    errors.push(e);
+                    self.synchronize();
+                    None
+                }
             }
         } else {
             match self.statement() {
