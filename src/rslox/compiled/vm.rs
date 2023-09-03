@@ -200,21 +200,16 @@ impl CallFrame {
             }
             OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
             OpCode::Function(i, upvalues) => {
-                let mut upvalues_ptrs = Vec::new();
+                let mut upvalue_ptrs = Vec::new();
                 for Upvalue { index, is_local } in upvalues {
                     let fixed_index = self.stack_index + *index;
                     if *is_local {
-                        let existing = std::mem::replace(
-                            &mut self.stack.borrow_mut()[fixed_index], Value::Nil);
-                        let rc = rcrc(existing);
-                        self.stack.borrow_mut()[fixed_index] = Value::OpenUpvalue(rc.clone());
-                        upvalues_ptrs.push(GcWeakMut::from(&rc));
+                        upvalue_ptrs.push(self.stack.borrow_mut()[fixed_index].as_open_upvalue());
                     } else {
                         todo!()
                     }
                 }
-                stack.borrow_mut().push(
-                    Value::Closure(chunk.get_function(*i), rcrc(upvalues_ptrs)));
+                stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), rcrc(upvalue_ptrs)));
             }
             OpCode::CloseUpvalue => { /* TODO */ }
             OpCode::UnpatchedJump =>
@@ -250,7 +245,7 @@ impl CallFrame {
             OpCode::SetUpvalue(index) => {
                 // We don't pop on assignment, to allow for chaining.
                 let value = stack.borrow().last().cloned().unwrap();
-                self.upvalues.unwrap_upgrade().borrow_mut()[*index].unwrap_upgrade().replace(value);
+                self.upvalues.unwrap_upgrade().borrow_mut()[*index].unwrap_upgrade().borrow_mut().set(value);
             }
             OpCode::DefineLocal(index) =>
                 (*stack.borrow_mut().get_mut(*index).unwrap()) =
@@ -261,8 +256,9 @@ impl CallFrame {
             }
             OpCode::SetLocal(index) => {
                 // We don't pop on assignment, to allow for chaining.
-                let value = stack.borrow().last().cloned().unwrap();
-                *stack.borrow_mut().get_mut(*index + self.stack_index).unwrap() = value.clone();
+                let value: Value = stack.borrow().last().cloned().unwrap();
+                stack.borrow_mut().get_mut(
+                    *index + self.stack_index).unwrap().set(value.clone());
             }
             OpCode::Bool(bool) => stack.borrow_mut().push(Value::Bool(*bool)),
             OpCode::Nil => stack.borrow_mut().push(Value::Nil),
@@ -357,7 +353,7 @@ impl CallFrame {
         let stack = &self.stack;
         eprintln!("stack for {}:", self.function.unwrap_upgrade().name.unwrap_upgrade());
         for (i, value) in stack.borrow().iter().enumerate() {
-            eprintln!("{:0>2}: {}", i, value.stringify())
+            eprintln!("{:0>2}: {:?}", i, value.pp_debug())
         }
     }
 }
@@ -1180,6 +1176,30 @@ fun foo(x) {
 foo(42);
         "#,
                        "42",
+        )
+    }
+
+    #[test]
+    fn access_closed_variable_locally() {
+        assert_printed(r#"
+fun foo(x) {
+  x = x + 1;
+  fun bar() {
+    x = x * 2;
+  }
+  fun bazz() {
+    x = x + 1;
+  }
+  x = x + 2;
+  bar();
+  bazz();
+  bazz();
+  bar();
+  print x;
+}
+foo(5);
+        "#,
+                       "36",
         )
     }
 }

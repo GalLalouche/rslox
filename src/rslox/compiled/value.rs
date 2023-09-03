@@ -1,8 +1,7 @@
-use std::borrow::BorrowMut;
 use std::convert::TryFrom;
 use std::ops::Deref;
 
-use crate::rslox::common::utils::RcRc;
+use crate::rslox::common::utils::{RcRc, rcrc};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::StackLocation;
@@ -70,6 +69,13 @@ impl Value {
             _ => false,
         }
     }
+    pub fn set(&mut self, value: Value) {
+        match self {
+            Value::UpvaluePtr(ref mut v) => *v.unwrap_upgrade().borrow_mut() = value,
+            Value::OpenUpvalue(ref mut v) => *v.borrow_mut() = value,
+            _ => *self = value,
+        }
+    }
 
     pub fn stringify(&self) -> String {
         match self {
@@ -82,6 +88,29 @@ impl Value {
             Value::OpenUpvalue(value) => value.borrow().stringify(),
         }
     }
+
+    // If self is already an open value, returns a weak wrapped rcrc. Otherwise, converts self to a
+    // managed OpenValue, and returns the new weak managed rcrc.
+    pub fn as_open_upvalue(&mut self) -> GcWeakMut<Value> {
+        match self.deref() {
+            Value::OpenUpvalue(v) => return v.into(),
+            Value::UpvaluePtr(_) => panic!("UpvaluePtr should not be made into an open upvalue (I think?)"),
+            _ => ()
+        }
+        let old = std::mem::replace(self, Value::Nil);
+        let managed = rcrc(old);
+        *self = Value::OpenUpvalue(managed.clone());
+        (&managed).into()
+    }
+
+    pub fn pp_debug(&self) -> String {
+        match self {
+            Value::UpvaluePtr(v) => format!("upv: {}", v.unwrap_upgrade().borrow().pp_debug()),
+            Value::OpenUpvalue(v) => format!("opv: {}", v.borrow().pp_debug()),
+            e => e.stringify(),
+        }
+    }
+
     pub fn is_truthy(&self) -> bool {
         !self.is_falsey()
     }
@@ -111,6 +140,7 @@ impl TryFrom<&Value> for f64 {
         match &value {
             Value::Number(f) => Ok(*f),
             Value::UpvaluePtr(v) => Self::try_from(v.unwrap_upgrade().borrow().deref()),
+            Value::OpenUpvalue(v) => Self::try_from(v.borrow().deref()),
             e => Err(format!("Expected Value::Number, but found {:?}", e)),
         }
     }
@@ -131,7 +161,7 @@ impl<'a> TryFrom<&'a mut Value> for &'a mut bool {
     type Error = String;
 
     fn try_from(value: &'a mut Value) -> Result<Self, Self::Error> {
-        match value.borrow_mut() {
+        match value {
             Value::Bool(b) => Ok(b),
             e => Err(format!("Expected Value::Bool, but found {:?}", e)),
         }
