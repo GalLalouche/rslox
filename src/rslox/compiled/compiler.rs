@@ -6,10 +6,10 @@ use num_traits::FromPrimitive;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, InternedString};
+use crate::rslox::compiled::chunk::{Chunk, InternedString, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, Upvalue};
+use crate::rslox::compiled::value::Function;
 
 type CompilerError = ParserError;
 

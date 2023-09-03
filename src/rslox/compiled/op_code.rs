@@ -1,6 +1,5 @@
-use crate::rslox::compiled::chunk::InternedString;
+use crate::rslox::compiled::chunk::{InternedString, Upvalue};
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::Upvalue;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;

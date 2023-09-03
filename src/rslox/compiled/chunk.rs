@@ -6,9 +6,9 @@ use std::rc::Rc;
 
 use crate::rslox::compiled::code::Code;
 use crate::rslox::compiled::gc::GcWeak;
-use crate::rslox::compiled::op_code::{CodeLocation, OpCode};
+use crate::rslox::compiled::op_code::{CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::{Function, Upvalue};
+use crate::rslox::compiled::value::Function;
 
 // Overriding for Borrow
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -35,6 +35,12 @@ pub struct Chunk {
     code: Code,
     interned_strings: Rc<HashSet<Rc<String>>>,
     functions: Vec<Rc<Function>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
+pub struct Upvalue {
+    pub index: StackLocation,
+    pub is_local: bool,
 }
 
 pub type InternedString = GcWeak<String>;

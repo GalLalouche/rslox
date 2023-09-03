@@ -8,11 +8,11 @@ use std::rc::Rc;
 use nonempty::NonEmpty;
 
 use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
-use crate::rslox::compiled::chunk::{Chunk, InternedString, InternedStrings};
+use crate::rslox::compiled::chunk::{Chunk, InternedString, InternedStrings, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, Upvalue, Value};
+use crate::rslox::compiled::value::{Function, Value};
 
 type FunctionName = String;
 
