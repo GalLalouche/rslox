@@ -4,7 +4,7 @@ use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
 
-use crate::rslox::common::error::{LoxResult, ParserError};
+use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::code::Line;
@@ -17,14 +17,12 @@ impl From<CompilerError> for NonEmpty<CompilerError> {
     fn from(value: CompilerError) -> Self { NonEmpty::new(value) }
 }
 
-#[cfg(test)]
 pub fn compile(tokens: Vec<Token>) -> LoxResult<Chunk> {
-    crate::rslox::common::error::convert_errors(Compiler::new(tokens).compile())
+    convert_errors(Compiler::new(tokens).compile())
 }
 
 type Depth = i64;
 
-const UNINITIALIZED: Depth = -1;
 
 type TokenPointer = usize;
 
@@ -329,8 +327,7 @@ impl Compiler {
         }?;
         let interned = self.intern_string(name);
         if self.depth > 0 {
-            self.active_locals_mut().push(
-                Local { name: interned.clone(), depth: UNINITIALIZED, is_captured: false });
+            self.active_locals_mut().push(Local::new(interned.clone()))
         }
         Ok((interned, line))
     }
@@ -594,6 +591,16 @@ struct Local {
     is_captured: bool,
 }
 
+impl Local {
+    const UNINITIALIZED: Depth = -1;
+
+    pub fn new(name: InternedString) -> Self {
+        Local { name, depth: Local::UNINITIALIZED, is_captured: false }
+    }
+
+    pub fn is_uninitialized(&self) -> bool { self.depth == Local::UNINITIALIZED }
+}
+
 #[derive(Debug, Default)]
 struct FunctionContext {
     locals: Vec<Local>,
@@ -615,28 +622,28 @@ impl FunctionContext {
 
     pub fn resolve_local(
         &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
-        for (i, Local { name: local_name, depth, .. }) in self.locals.iter().enumerate() {
-            if depth == &UNINITIALIZED {
+        for (index, local) in self.locals.iter().enumerate() {
+            if local.is_uninitialized() {
                 return Err(CompilerError::new(
                     format!(
                         "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
                     Token::new(line, TokenType::identifier(name.to_owned())),
                 ));
             }
-            if name.compare_values(local_name) {
-                return Ok(Some(i));
+            if name.compare_values(&local.name) {
+                return Ok(Some(index));
             }
         }
         return Ok(None);
     }
 
     pub fn resolve_local_for_upvalue(&mut self, name: &InternedString) -> Option<StackLocation> {
-        for (i, Local { name: local_name, depth, .. }) in self.locals.iter().enumerate() {
-            assert_ne!(depth, &UNINITIALIZED);
-            if name.compare_values(local_name) {
-                assert_ne!(name, local_name);
-                self.locals[i].is_captured = true;
-                return Some(i);
+        for (index, local) in self.locals.iter().enumerate() {
+            assert!(!local.is_uninitialized());
+            if name.compare_values(&local.name) {
+                assert_ne!(name, &local.name);
+                self.locals[index].is_captured = true;
+                return Some(index);
             }
         }
         None
