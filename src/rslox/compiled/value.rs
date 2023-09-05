@@ -1,6 +1,6 @@
 use std::convert::{TryFrom, TryInto};
 
-use crate::rslox::common::utils::RcRc;
+use crate::rslox::common::utils::{RcRc, rcrc};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::StackLocation;
@@ -12,7 +12,7 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Closure(GcWeak<Function>, RcRc<WeakUpvalues>),
+    Closure(GcWeak<Function>, Upvalues),
     UpvaluePtr(GcWeakMut<PointedUpvalue>),
 }
 
@@ -22,9 +22,26 @@ pub enum PointedUpvalue {
     Closed(GcWeakMut<Value>),
 }
 
-// TODO It is GcWeakMut because its state changes from Open to Closed. However, holders of this
-//  struct shouldn't modify it. This logic should be encapsulated.
-pub type WeakUpvalues = Vec<GcWeakMut<PointedUpvalue>>;
+#[derive(Debug, Clone)]
+pub struct Upvalues {
+    upvalues: RcRc<Vec<GcWeakMut<PointedUpvalue>>>,
+}
+
+impl Upvalues {
+    pub fn new(upvalues: Vec<GcWeakMut<PointedUpvalue>>) -> Self {
+        Upvalues { upvalues: rcrc(upvalues) }
+    }
+
+    pub fn get(&self, index: StackLocation) -> GcWeakMut<PointedUpvalue> {
+        self.upvalues.borrow()[index].clone()
+    }
+
+    // The &mut self is here to protected against modifications, since we do modify the internal
+    // upvalue.
+    pub fn set(&mut self, index: StackLocation, value: Value) {
+        self.upvalues.borrow()[index].unwrap_upgrade().borrow_mut().set(value)
+    }
+}
 
 impl PointedUpvalue {
     pub fn set(&mut self, value: Value) {
@@ -38,7 +55,7 @@ impl PointedUpvalue {
     fn stringify(&self) -> String {
         match self {
             PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow()[*i].stringify(),
-            PointedUpvalue::Closed(_) => todo! (),
+            PointedUpvalue::Closed(_) => todo!(),
         }
     }
 
@@ -52,15 +69,6 @@ impl PointedUpvalue {
             PointedUpvalue::Closed(_) => todo!(),
         }
     }
-
-    // pub fn get(&self) -> RefMut<Value> {
-    //     match self {
-    //         PointedUpvalue::Open(i, s) => {
-    //             RefMut::map(s.unwrap_upgrade().borrow_mut(), |s| &mut s[*i])
-    //         },
-    //         PointedUpvalue::Closed(_) => todo!(),
-    //     }
-    // }
 }
 
 
@@ -165,12 +173,12 @@ impl TryFrom<&Value> for f64 {
 }
 
 // TODO The closures really shouldn't be mut... perhaps wrap in a struct?
-impl <'a> TryFrom<&'a Value> for (GcWeak<Function>, GcWeakMut<WeakUpvalues>) {
+impl<'a> TryFrom<&'a Value> for (GcWeak<Function>, Upvalues) {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
-            Value::Closure(f, uv) => Ok((f.clone(), uv.into())),
+            Value::Closure(f, uv) => Ok((f.clone(), uv.clone())),
             Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
             e => Err(format!("Expected Value::Closure, but found {:?}", e)),
         }

@@ -13,7 +13,7 @@ use crate::rslox::compiled::chunk::{Chunk, InternedString, InternedStrings, Upva
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, PointedUpvalue, Value, WeakUpvalues};
+use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
 
 type FunctionName = String;
 
@@ -45,13 +45,13 @@ impl VirtualMachine {
         let script = Rc::new(Function { name: GcWeak::from(&name), arity: 0, chunk });
         let stack: RcRc<Vec<Value>> = Default::default();
         let globals: RcRc<HashMap<String, Value>> = Default::default();
-        let upvalues = GcWeakMut::null();
+        let upvalues = Upvalues::new(Vec::new());
         let open_upvalues = rcrc(LinkedList::new());
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
             (&script).into(),
             0 as StackLocation,
-            upvalues, // upvalues can be empty since we
+            upvalues,
             stack.clone(),
             globals,
             open_upvalues,
@@ -124,7 +124,7 @@ struct CallFrame {
     interned_strings: CallFrameInternedStrings,
     function: GcWeak<Function>,
     stack: RcRc<Vec<Value>>,
-    upvalues: GcWeakMut<WeakUpvalues>,
+    closure_upvalues: Upvalues,
     globals: RcRc<HashMap<String, Value>>,
     open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
     stack_index: usize,
@@ -138,7 +138,7 @@ impl CallFrame {
         ip: InstructionPointer,
         function: GcWeak<Function>,
         stack_index: StackLocation,
-        upvalues: GcWeakMut<WeakUpvalues>,
+        upvalues: Upvalues,
         stack: RcRc<Vec<Value>>,
         globals: RcRc<HashMap<String, Value>>,
         open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
@@ -150,7 +150,7 @@ impl CallFrame {
             interned_strings,
             function,
             stack,
-            upvalues,
+            closure_upvalues: upvalues,
             globals,
             stack_index,
             open_upvalues,
@@ -215,7 +215,7 @@ impl CallFrame {
                         todo!()
                     }
                 }
-                stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), rcrc(upvalue_ptrs)));
+                stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Upvalues::new(upvalue_ptrs)));
             }
             OpCode::CloseUpvalue => { /* TODO */ }
             OpCode::UnpatchedJump =>
@@ -245,13 +245,12 @@ impl CallFrame {
                 globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
             }
             OpCode::GetUpvalue(index) =>
-                stack.borrow_mut().push(
-                    Value::UpvaluePtr(self.upvalues.unwrap_upgrade().borrow()[*index].clone())),
+                stack.borrow_mut().push(Value::UpvaluePtr(self.closure_upvalues.get(*index).clone())),
 
             OpCode::SetUpvalue(index) => {
                 // We don't pop on assignment, to allow for chaining.
                 let value = stack.borrow().last().cloned().unwrap();
-                self.upvalues.unwrap_upgrade().borrow_mut()[*index].unwrap_upgrade().borrow_mut().set(value);
+                self.closure_upvalues.set(*index, value);
             }
             OpCode::DefineLocal(index) =>
                 (*stack.borrow_mut().get_mut(*index).unwrap()) =
