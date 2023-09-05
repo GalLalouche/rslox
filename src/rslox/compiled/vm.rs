@@ -1374,4 +1374,26 @@ globalGet();
             "updated",
         )
     }
+
+    #[test]
+    fn sharing_closures() {
+        assert_printed(
+            r#"
+{
+    fun foo(x) {
+      fun bar() {
+        x = x + 1;
+        print x;
+      }
+      f = bar;
+      g = bar;
+    }
+    foo(42);
+}
+f();
+g();
+           "#,
+            "4344",
+        )
+    }
 }
