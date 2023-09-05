@@ -186,8 +186,8 @@ impl CallFrame {
         let (op, line) = instructions.get(self.ip).unwrap();
         macro_rules! binary {
                 ($l:tt) => {{
-                    let v1 =
-                        self.try_number(&stack.borrow_mut().pop().unwrap(), stringify!($l), *line)?;
+                    let popped = stack.borrow_mut().pop().unwrap();
+                    let v1 = self.try_number(&popped, stringify!($l), *line)?;
                     self.update_top_number(stringify!($l), *line, |n| n $l v1)
                 }}
             }
@@ -211,20 +211,21 @@ impl CallFrame {
             }
             OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
             OpCode::Function(i, upvalues) => {
-                let mut upvalue_ptrs = Vec::new();
+                let mut upvalue_ptrs = Vec::with_capacity(upvalues.len());
                 for Upvalue { index, is_local } in upvalues {
-                    let fixed_index = self.stack_index + *index;
-                    if *is_local {
-                        upvalue_ptrs.push(self.capture_upvalue(fixed_index));
-                    } else {
-                        todo!()
-                    }
+                    upvalue_ptrs.push(
+                        if *is_local {
+                            self.capture_upvalue(self.stack_index + *index)
+                        } else {
+                            let enclosing_func = &self.stack.borrow_mut()[self.stack_index - 1];
+                            let (_, enclosing_upvalues) = enclosing_func.try_into().unwrap();
+                            enclosing_upvalues.get(*index)
+                        });
                 }
                 stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Upvalues::new(upvalue_ptrs)));
             }
             OpCode::CloseUpvalue => self.close_upvalues(self.stack_index),
-            OpCode::UnpatchedJump =>
-                panic!("Jump should have been patched at line: '{}'", line),
+            OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
             OpCode::JumpIfFalse(index) => {
                 assert!(*index > self.ip, "Jump target '{}' was smaller than ip '{}'", index, self.ip);
                 let should_skip = stack.borrow_mut().pop().unwrap().is_falsey();
@@ -1264,6 +1265,45 @@ foo(5);
   f = bar;
 }
 f();
+        "#,
+                       "42",
+        )
+    }
+
+    #[test]
+    fn multiple_closures() {
+        assert_printed(r#"
+{
+  fun foo(a, b) {
+    fun bar(c, d) {
+        fun bazz(e, f) {
+            print a + b + c + d + e + f;
+        }
+        return bazz("e", "f");
+    }
+    return bar("c", "d");
+  }
+  f = foo;
+}
+f("a", "b");
+        "#,
+                       "abcdef",
+        )
+    }
+
+    #[test]
+    fn non_local_closure() {
+        assert_printed(r#"
+fun foo(x) {
+  fun bar() {
+      fun bazz() {
+        print x;
+      }
+      bazz();
+  }
+  bar();
+}
+foo(42);
         "#,
                        "42",
         )

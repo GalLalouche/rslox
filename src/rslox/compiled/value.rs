@@ -6,7 +6,6 @@ use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::PointedUpvalue::Closed;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -33,7 +32,7 @@ impl PointedUpvalue {
                     v.unwrap_upgrade().borrow().len() - 1,
                     "Trying to close a value not on the top of the stack",
                 );
-                *self = Closed(rcrc(v.unwrap_upgrade().borrow_mut().pop().unwrap()));
+                *self = PointedUpvalue::Closed(rcrc(v.unwrap_upgrade().borrow_mut().pop().unwrap()));
             }
             PointedUpvalue::Closed(_) => panic!("Can't close a closed value!")
         }
@@ -79,7 +78,7 @@ impl PointedUpvalue {
 
     fn pp_debug(&self) -> String { todo!() }
 
-    fn try_into_aux<A, F: FnOnce(&Value) -> Result<A, String>>(&self, f: F) -> Result<A, String> {
+    fn apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B {
         match self {
             PointedUpvalue::Open(i, s) => f(s.unwrap_upgrade().borrow().get(*i).unwrap()),
             PointedUpvalue::Closed(v) => f(v.borrow().deref()),
@@ -123,12 +122,7 @@ impl Value {
     pub fn is_string(&self) -> bool {
         match &self {
             Value::String(_) => true,
-            _ => false,
-        }
-    }
-    pub fn is_function(&self) -> bool {
-        match &self {
-            Value::Closure(..) => true,
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|v| v.is_string()),
             _ => false,
         }
     }
@@ -165,6 +159,7 @@ impl Value {
         match &self {
             Value::Nil => true,
             Value::Bool(false) => true,
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|v| v.is_falsey()),
             _ => false,
         }
     }
@@ -182,7 +177,7 @@ impl TryFrom<&Value> for f64 {
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Number(f) => Ok(*f),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Number, but found {:?}", e)),
         }
     }
@@ -195,7 +190,7 @@ impl<'a> TryFrom<&'a Value> for (GcWeak<Function>, Upvalues) {
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Closure(f, uv) => Ok((f.clone(), uv.clone())),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Closure, but found {:?}", e)),
         }
     }
@@ -207,7 +202,7 @@ impl<'a> TryFrom<&'a Value> for bool {
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Bool(b) => Ok(*b),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Bool, but found {:?}", e)),
         }
     }
@@ -219,7 +214,7 @@ impl<'a> TryFrom<&'a Value> for InternedString {
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
         match &value {
             Value::String(s) => Ok(s.clone()),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
             e => Err(format!("Expected Value::String, but found {:?}", e)),
         }
     }
