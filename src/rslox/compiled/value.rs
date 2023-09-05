@@ -1,10 +1,12 @@
 use std::convert::{TryFrom, TryInto};
+use std::ops::Deref;
 
 use crate::rslox::common::utils::{RcRc, rcrc};
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
+use crate::rslox::compiled::value::PointedUpvalue::Closed;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -19,7 +21,23 @@ pub enum Value {
 #[derive(Debug, Clone)]
 pub enum PointedUpvalue {
     Open(StackLocation, GcWeakMut<Vec<Value>>),
-    Closed(GcWeakMut<Value>),
+    Closed(RcRc<Value>),
+}
+
+impl PointedUpvalue {
+    pub fn close(&mut self) {
+        match self {
+            PointedUpvalue::Open(i, v) => {
+                assert_eq!(
+                    *i,
+                    v.unwrap_upgrade().borrow().len() - 1,
+                    "Trying to close a value not on the top of the stack",
+                );
+                *self = Closed(rcrc(v.unwrap_upgrade().borrow_mut().pop().unwrap()));
+            }
+            PointedUpvalue::Closed(_) => panic!("Can't close a closed value!")
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -48,14 +66,14 @@ impl PointedUpvalue {
         assert!(!value.is_upvalue_ptr());
         match self {
             PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow_mut()[*i] = value,
-            PointedUpvalue::Closed(_) => todo!(),
+            PointedUpvalue::Closed(v) => v.borrow_mut().set(value),
         }
     }
 
     fn stringify(&self) -> String {
         match self {
             PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow()[*i].stringify(),
-            PointedUpvalue::Closed(_) => todo!(),
+            PointedUpvalue::Closed(v) => v.borrow().stringify(),
         }
     }
 
@@ -63,10 +81,8 @@ impl PointedUpvalue {
 
     fn try_into_aux<A, F: FnOnce(&Value) -> Result<A, String>>(&self, f: F) -> Result<A, String> {
         match self {
-            PointedUpvalue::Open(i, s) => {
-                f(s.unwrap_upgrade().borrow().get(*i).unwrap())
-            }
-            PointedUpvalue::Closed(_) => todo!(),
+            PointedUpvalue::Open(i, s) => f(s.unwrap_upgrade().borrow().get(*i).unwrap()),
+            PointedUpvalue::Closed(v) => f(v.borrow().deref()),
         }
     }
 }
@@ -210,8 +226,5 @@ impl<'a> TryFrom<&'a Value> for InternedString {
 }
 
 impl InternedString {
-    pub fn to_owned(&self) -> String {
-        use std::ops::Deref;
-        self.unwrap_upgrade().deref().clone()
-    }
+    pub fn to_owned(&self) -> String { self.unwrap_upgrade().deref().clone() }
 }

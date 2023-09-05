@@ -47,6 +47,7 @@ impl VirtualMachine {
         let globals: RcRc<HashMap<String, Value>> = Default::default();
         let upvalues = Upvalues::new(Vec::new());
         let open_upvalues = rcrc(LinkedList::new());
+        let closed_upvalues = rcrc(Vec::new());
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
             (&script).into(),
@@ -55,6 +56,7 @@ impl VirtualMachine {
             stack.clone(),
             globals,
             open_upvalues,
+            closed_upvalues,
         );
         let mut vm = VirtualMachine { frames: NonEmpty::new(top_frame) };
         while vm.unfinished() {
@@ -127,6 +129,7 @@ struct CallFrame {
     closure_upvalues: Upvalues,
     globals: RcRc<HashMap<String, Value>>,
     open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
+    closed_upvalues: RcRc<Vec<RcRc<PointedUpvalue>>>,
     stack_index: usize,
 }
 
@@ -142,6 +145,7 @@ impl CallFrame {
         stack: RcRc<Vec<Value>>,
         globals: RcRc<HashMap<String, Value>>,
         open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
+        closed_upvalues: RcRc<Vec<RcRc<PointedUpvalue>>>,
     ) -> Self {
         let interned_strings = CallFrameInternedStrings::new(
             function.clone().unwrap_upgrade().chunk.get_interned_strings());
@@ -154,6 +158,7 @@ impl CallFrame {
             globals,
             stack_index,
             open_upvalues,
+            closed_upvalues,
         }
     }
     pub fn current_line(&self) -> Line {
@@ -217,7 +222,7 @@ impl CallFrame {
                 }
                 stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Upvalues::new(upvalue_ptrs)));
             }
-            OpCode::CloseUpvalue => { /* TODO */ }
+            OpCode::CloseUpvalue => self.close_upvalues(self.stack_index),
             OpCode::UnpatchedJump =>
                 panic!("Jump should have been patched at line: '{}'", line),
             OpCode::JumpIfFalse(index) => {
@@ -305,6 +310,7 @@ impl CallFrame {
                     stack.clone(),
                     globals.clone(),
                     self.open_upvalues.clone(),
+                    self.closed_upvalues.clone(),
                 )));
             }
             OpCode::Add =>
@@ -373,6 +379,24 @@ impl CallFrame {
         let result = rcrc(PointedUpvalue::Open(index, (&self.stack).into()));
         cursor.insert(result.clone());
         (&result).into()
+    }
+
+    fn close_upvalues(&mut self, max_stack_index: StackLocation) {
+        let mut ref_mut = self.open_upvalues.borrow_mut();
+        let mut cursor = ref_mut.cursor();
+        // TODO reduce duplication with above
+        while let Some(head) = cursor.peek_next() {
+            let upvalue_index = match *head.borrow() {
+                PointedUpvalue::Open(location, ..) => location,
+                PointedUpvalue::Closed(..) => panic!("open_upvalues contained a closed value"),
+            };
+            if upvalue_index < max_stack_index {
+                break;
+            }
+            let next = cursor.remove().unwrap();
+            next.borrow_mut().close();
+            self.closed_upvalues.borrow_mut().push(next);
+        }
     }
 
     fn _debug_stack(&self) -> () {
@@ -1225,6 +1249,23 @@ fun foo(x) {
 foo(5);
         "#,
                        "36",
+        )
+    }
+
+    #[test]
+    fn basic_closed_upvalues() {
+        assert_printed(r#"
+
+{
+  var x = 42;
+  fun bar() {
+    print x;
+  }
+  f = bar;
+}
+f();
+        "#,
+                       "42",
         )
     }
 }
