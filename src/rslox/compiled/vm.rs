@@ -5,6 +5,7 @@ use std::io::Write;
 use std::ops::Deref;
 use std::rc::Rc;
 
+use linked_list::LinkedList;
 use nonempty::NonEmpty;
 
 use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
@@ -12,7 +13,7 @@ use crate::rslox::compiled::chunk::{Chunk, InternedString, InternedStrings, Upva
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, Value};
+use crate::rslox::compiled::value::{Function, PointedUpvalue, Value, WeakUpvalues};
 
 type FunctionName = String;
 
@@ -45,6 +46,7 @@ impl VirtualMachine {
         let stack: RcRc<Vec<Value>> = Default::default();
         let globals: RcRc<HashMap<String, Value>> = Default::default();
         let upvalues = GcWeakMut::null();
+        let open_upvalues = rcrc(LinkedList::new());
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
             (&script).into(),
@@ -52,6 +54,7 @@ impl VirtualMachine {
             upvalues, // upvalues can be empty since we
             stack.clone(),
             globals,
+            open_upvalues,
         );
         let mut vm = VirtualMachine { frames: NonEmpty::new(top_frame) };
         while vm.unfinished() {
@@ -121,8 +124,9 @@ struct CallFrame {
     interned_strings: CallFrameInternedStrings,
     function: GcWeak<Function>,
     stack: RcRc<Vec<Value>>,
-    upvalues: GcWeakMut<Vec<GcWeakMut<Value>>>,
+    upvalues: GcWeakMut<WeakUpvalues>,
     globals: RcRc<HashMap<String, Value>>,
+    open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
     stack_index: usize,
 }
 
@@ -134,9 +138,10 @@ impl CallFrame {
         ip: InstructionPointer,
         function: GcWeak<Function>,
         stack_index: StackLocation,
-        upvalues: GcWeakMut<Vec<GcWeakMut<Value>>>,
+        upvalues: GcWeakMut<WeakUpvalues>,
         stack: RcRc<Vec<Value>>,
         globals: RcRc<HashMap<String, Value>>,
+        open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
     ) -> Self {
         let interned_strings = CallFrameInternedStrings::new(
             function.clone().unwrap_upgrade().chunk.get_interned_strings());
@@ -148,6 +153,7 @@ impl CallFrame {
             upvalues,
             globals,
             stack_index,
+            open_upvalues,
         }
     }
     pub fn current_line(&self) -> Line {
@@ -204,7 +210,7 @@ impl CallFrame {
                 for Upvalue { index, is_local } in upvalues {
                     let fixed_index = self.stack_index + *index;
                     if *is_local {
-                        upvalue_ptrs.push(self.stack.borrow_mut()[fixed_index].as_open_upvalue());
+                        upvalue_ptrs.push(self.capture_upvalue(fixed_index));
                     } else {
                         todo!()
                     }
@@ -240,7 +246,7 @@ impl CallFrame {
             }
             OpCode::GetUpvalue(index) =>
                 stack.borrow_mut().push(
-                    Value::upvalue_ptr(self.upvalues.unwrap_upgrade().borrow()[*index].clone())),
+                    Value::UpvaluePtr(self.upvalues.unwrap_upgrade().borrow()[*index].clone())),
 
             OpCode::SetUpvalue(index) => {
                 // We don't pop on assignment, to allow for chaining.
@@ -283,7 +289,7 @@ impl CallFrame {
             OpCode::Call(arg_count) => {
                 let func_index = stack.borrow().len() - arg_count - 1;
                 let value = stack.borrow().get(func_index).cloned().unwrap();
-                let (function, upvalues): (GcWeak<Function>, GcWeakMut<Vec<GcWeakMut<Value>>>) =
+                let (function, upvalues) =
                     (&value).try_into().map_err(|err: String| self.err(err, *line))?;
                 let arity = function.unwrap_upgrade().arity;
                 if arity != *arg_count {
@@ -299,6 +305,7 @@ impl CallFrame {
                     upvalues,
                     stack.clone(),
                     globals.clone(),
+                    self.open_upvalues.clone(),
                 )));
             }
             OpCode::Add =>
@@ -349,6 +356,26 @@ impl CallFrame {
         Ok(())
     }
 
+    fn capture_upvalue(&mut self, index: StackLocation) -> GcWeakMut<PointedUpvalue> {
+        let mut ref_mut = self.open_upvalues.borrow_mut();
+        let mut cursor = ref_mut.cursor();
+        while let Some(head) = cursor.next() {
+            let upvalue_index = match *head.borrow() {
+                PointedUpvalue::Open(location, ..) => location,
+                PointedUpvalue::Closed(..) => panic!("open_upvalues contained a closed value"),
+            };
+            if upvalue_index == index {
+                return GcWeakMut::from(head.deref());
+            }
+            if upvalue_index < index {
+                break;
+            }
+        }
+        let result = rcrc(PointedUpvalue::Open(index, (&self.stack).into()));
+        cursor.insert(result.clone());
+        (&result).into()
+    }
+
     fn _debug_stack(&self) -> () {
         let stack = &self.stack;
         eprintln!("stack for {}:", self.function.unwrap_upgrade().name.unwrap_upgrade());
@@ -387,7 +414,6 @@ mod tests {
                 Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
                 Value::Closure(..) => panic!("Closures don't have a traced value"),
                 Value::UpvaluePtr(..) => panic!("Upvalues don't have a traced value"),
-                Value::OpenUpvalue(..) => panic!("Upvalues don't have a traced value"),
             }
         }
     }

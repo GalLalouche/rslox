@@ -1,9 +1,9 @@
-use std::convert::TryFrom;
-use std::ops::Deref;
+use std::convert::{TryFrom, TryInto};
 
-use crate::rslox::common::utils::{RcRc, rcrc};
+use crate::rslox::common::utils::RcRc;
 use crate::rslox::compiled::chunk::{Chunk, InternedString};
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
+use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
 
 #[derive(Debug, Clone)]
@@ -12,9 +12,55 @@ pub enum Value {
     Bool(bool),
     Nil,
     String(InternedString),
-    Closure(GcWeak<Function>, RcRc<Vec<GcWeakMut<Value>>>),
-    UpvaluePtr(GcWeakMut<Value>),
-    OpenUpvalue(RcRc<Value>),
+    Closure(GcWeak<Function>, RcRc<WeakUpvalues>),
+    UpvaluePtr(GcWeakMut<PointedUpvalue>),
+}
+
+#[derive(Debug, Clone)]
+pub enum PointedUpvalue {
+    Open(StackLocation, GcWeakMut<Vec<Value>>),
+    Closed(GcWeakMut<Value>),
+}
+
+// TODO It is GcWeakMut because its state changes from Open to Closed. However, holders of this
+//  struct shouldn't modify it. This logic should be encapsulated.
+pub type WeakUpvalues = Vec<GcWeakMut<PointedUpvalue>>;
+
+impl PointedUpvalue {
+    pub fn set(&mut self, value: Value) {
+        assert!(!value.is_upvalue_ptr());
+        match self {
+            PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow_mut()[*i] = value,
+            PointedUpvalue::Closed(_) => todo!(),
+        }
+    }
+
+    fn stringify(&self) -> String {
+        match self {
+            PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow()[*i].stringify(),
+            PointedUpvalue::Closed(_) => todo! (),
+        }
+    }
+
+    fn pp_debug(&self) -> String { todo!() }
+
+    fn try_into_aux<A, F: FnOnce(&Value) -> Result<A, String>>(&self, f: F) -> Result<A, String> {
+        match self {
+            PointedUpvalue::Open(i, s) => {
+                f(s.unwrap_upgrade().borrow().get(*i).unwrap())
+            }
+            PointedUpvalue::Closed(_) => todo!(),
+        }
+    }
+
+    // pub fn get(&self) -> RefMut<Value> {
+    //     match self {
+    //         PointedUpvalue::Open(i, s) => {
+    //             RefMut::map(s.unwrap_upgrade().borrow_mut(), |s| &mut s[*i])
+    //         },
+    //         PointedUpvalue::Closed(_) => todo!(),
+    //     }
+    // }
 }
 
 
@@ -62,10 +108,10 @@ impl Value {
             _ => false,
         }
     }
+
     pub fn set(&mut self, value: Value) {
         match self {
-            Value::UpvaluePtr(ref mut v) => *v.unwrap_upgrade().borrow_mut() = value,
-            Value::OpenUpvalue(ref mut v) => *v.borrow_mut() = value,
+            Value::UpvaluePtr(ref mut v) => v.unwrap_upgrade().borrow_mut().set(value),
             _ => *self = value,
         }
     }
@@ -78,28 +124,12 @@ impl Value {
             Value::String(s) => s.unwrap_upgrade().to_string(),
             Value::Closure(f, _) => f.unwrap_upgrade().stringify(),
             Value::UpvaluePtr(value) => value.unwrap_upgrade().borrow().stringify(),
-            Value::OpenUpvalue(value) => value.borrow().stringify(),
         }
-    }
-
-    // If self is already an open value, returns a weak wrapped rcrc. Otherwise, converts self to a
-    // managed OpenValue, and returns the new weak managed rcrc.
-    pub fn as_open_upvalue(&mut self) -> GcWeakMut<Value> {
-        match self.deref() {
-            Value::OpenUpvalue(v) => return v.into(),
-            Value::UpvaluePtr(_) => panic!("UpvaluePtr should not be made into an open upvalue (I think?)"),
-            _ => ()
-        }
-        let old = std::mem::replace(self, Value::Nil);
-        let managed = rcrc(old);
-        *self = Value::OpenUpvalue(managed.clone());
-        (&managed).into()
     }
 
     pub fn pp_debug(&self) -> String {
         match self {
             Value::UpvaluePtr(v) => format!("upv: {}", v.unwrap_upgrade().borrow().pp_debug()),
-            Value::OpenUpvalue(v) => format!("opv: {}", v.borrow().pp_debug()),
             e => e.stringify(),
         }
     }
@@ -120,10 +150,6 @@ impl Value {
             _ => false,
         }
     }
-    pub fn upvalue_ptr(value: GcWeakMut<Value>) -> Self {
-        assert!(!value.unwrap_upgrade().borrow().is_upvalue_ptr());
-        Value::UpvaluePtr(value)
-    }
 }
 
 impl TryFrom<&Value> for f64 {
@@ -132,41 +158,32 @@ impl TryFrom<&Value> for f64 {
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Number(f) => Ok(*f),
-            Value::UpvaluePtr(v) => Self::try_from(v.unwrap_upgrade().borrow().deref()),
-            Value::OpenUpvalue(v) => Self::try_from(v.borrow().deref()),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
             e => Err(format!("Expected Value::Number, but found {:?}", e)),
         }
     }
 }
 
-impl TryFrom<&Value> for (GcWeak<Function>, GcWeakMut<Vec<GcWeakMut<Value>>>) {
+// TODO The closures really shouldn't be mut... perhaps wrap in a struct?
+impl <'a> TryFrom<&'a Value> for (GcWeak<Function>, GcWeakMut<WeakUpvalues>) {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Closure(f, uv) => Ok((f.clone(), uv.into())),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
             e => Err(format!("Expected Value::Closure, but found {:?}", e)),
         }
     }
 }
 
-impl<'a> TryFrom<&'a mut Value> for &'a mut bool {
-    type Error = String;
-
-    fn try_from(value: &'a mut Value) -> Result<Self, Self::Error> {
-        match value {
-            Value::Bool(b) => Ok(b),
-            e => Err(format!("Expected Value::Bool, but found {:?}", e)),
-        }
-    }
-}
-
-impl<'a> TryFrom<&'a Value> for &'a bool {
+impl<'a> TryFrom<&'a Value> for bool {
     type Error = String;
 
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
         match &value {
-            Value::Bool(b) => Ok(&b),
+            Value::Bool(b) => Ok(*b),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
             e => Err(format!("Expected Value::Bool, but found {:?}", e)),
         }
     }
@@ -178,11 +195,15 @@ impl<'a> TryFrom<&'a Value> for InternedString {
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
         match &value {
             Value::String(s) => Ok(s.clone()),
+            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().try_into_aux(|e| e.try_into()),
             e => Err(format!("Expected Value::String, but found {:?}", e)),
         }
     }
 }
 
 impl InternedString {
-    pub fn to_owned(&self) -> String { self.unwrap_upgrade().deref().clone() }
+    pub fn to_owned(&self) -> String {
+        use std::ops::Deref;
+        self.unwrap_upgrade().deref().clone()
+    }
 }

@@ -9,6 +9,7 @@ option-ext = "0.2.0"
 nonempty = "0.8.1"
 num-derive = "0.4.0"
 num-traits = "0.2"
+linked-list = "0.0.3"
 
 [dev-dependencies]
 lazy_static = "1.4.0"
