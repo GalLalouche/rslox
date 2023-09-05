@@ -12,6 +12,7 @@ pub enum Value {
     Number(f64),
     Bool(bool),
     Nil,
+    TemporaryPlaceholder,
     String(InternedString),
     Closure(GcWeak<Function>, Upvalues),
     UpvaluePtr(GcWeakMut<PointedUpvalue>),
@@ -27,12 +28,10 @@ impl PointedUpvalue {
     pub fn close(&mut self) {
         match self {
             PointedUpvalue::Open(i, v) => {
-                assert_eq!(
-                    *i,
-                    v.unwrap_upgrade().borrow().len() - 1,
-                    "Trying to close a value not on the top of the stack",
-                );
-                *self = PointedUpvalue::Closed(rcrc(v.unwrap_upgrade().borrow_mut().pop().unwrap()));
+                assert!(!v.unwrap_upgrade().borrow().is_empty());
+                let value = std::mem::replace(
+                    &mut v.unwrap_upgrade().borrow_mut()[*i], Value::TemporaryPlaceholder);
+                *self = PointedUpvalue::Closed(rcrc(value));
             }
             PointedUpvalue::Closed(_) => panic!("Can't close a closed value!")
         }
@@ -76,7 +75,12 @@ impl PointedUpvalue {
         }
     }
 
-    fn pp_debug(&self) -> String { todo!() }
+    pub fn pp_debug(&self) -> String {
+       match self {
+           PointedUpvalue::Open(i, _) => format!("open{}", i).to_owned(),
+           PointedUpvalue::Closed(_) => "closed".to_owned(),
+       }
+    }
 
     fn apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B {
         match self {
@@ -128,8 +132,9 @@ impl Value {
     }
 
     pub fn set(&mut self, value: Value) {
+        assert_ne!(value, Value::TemporaryPlaceholder);
         match self {
-            Value::UpvaluePtr(ref mut v) => v.unwrap_upgrade().borrow_mut().set(value),
+           Value::UpvaluePtr(ref mut v) => v.unwrap_upgrade().borrow_mut().set(value),
             _ => *self = value,
         }
     }
@@ -142,6 +147,7 @@ impl Value {
             Value::String(s) => s.unwrap_upgrade().to_string(),
             Value::Closure(f, _) => f.unwrap_upgrade().stringify(),
             Value::UpvaluePtr(value) => value.unwrap_upgrade().borrow().stringify(),
+            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
         }
     }
 
@@ -157,6 +163,7 @@ impl Value {
     }
     pub fn is_falsey(&self) -> bool {
         match &self {
+            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
             Value::Nil => true,
             Value::Bool(false) => true,
             Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|v| v.is_falsey()),
@@ -183,7 +190,6 @@ impl TryFrom<&Value> for f64 {
     }
 }
 
-// TODO The closures really shouldn't be mut... perhaps wrap in a struct?
 impl<'a> TryFrom<&'a Value> for (GcWeak<Function>, Upvalues) {
     type Error = String;
 

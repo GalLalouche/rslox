@@ -5,7 +5,7 @@ use std::io::Write;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use linked_list::LinkedList;
+use linked_list::{Cursor, LinkedList};
 use nonempty::NonEmpty;
 
 use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
@@ -174,6 +174,7 @@ impl CallFrame {
                 return Ok(Some(cf));
             }
         }
+        self.close_upvalues(self.stack_index);
         Ok(None)
     }
 
@@ -366,10 +367,7 @@ impl CallFrame {
         let mut ref_mut = self.open_upvalues.borrow_mut();
         let mut cursor = ref_mut.cursor();
         while let Some(head) = cursor.next() {
-            let upvalue_index = match *head.borrow() {
-                PointedUpvalue::Open(location, ..) => location,
-                PointedUpvalue::Closed(..) => panic!("open_upvalues contained a closed value"),
-            };
+            let upvalue_index = CallFrame::open_index(&head);
             if upvalue_index == index {
                 return GcWeakMut::from(head.deref());
             }
@@ -378,25 +376,29 @@ impl CallFrame {
             }
         }
         let result = rcrc(PointedUpvalue::Open(index, (&self.stack).into()));
+        cursor.prev();
         cursor.insert(result.clone());
         (&result).into()
     }
 
     fn close_upvalues(&mut self, max_stack_index: StackLocation) {
         let mut ref_mut = self.open_upvalues.borrow_mut();
-        let mut cursor = ref_mut.cursor();
-        // TODO reduce duplication with above
+        let mut cursor: Cursor<RcRc<PointedUpvalue>> = ref_mut.cursor();
         while let Some(head) = cursor.peek_next() {
-            let upvalue_index = match *head.borrow() {
-                PointedUpvalue::Open(location, ..) => location,
-                PointedUpvalue::Closed(..) => panic!("open_upvalues contained a closed value"),
-            };
+            let upvalue_index = CallFrame::open_index(&head);
             if upvalue_index < max_stack_index {
                 break;
             }
             let next = cursor.remove().unwrap();
             next.borrow_mut().close();
             self.closed_upvalues.borrow_mut().push(next);
+        }
+    }
+
+    fn open_index(head: &RcRc<PointedUpvalue>) -> StackLocation {
+        match *head.borrow() {
+            PointedUpvalue::Open(location, ..) => location,
+            PointedUpvalue::Closed(..) => panic!("open_upvalues contained a closed value"),
         }
     }
 
@@ -438,6 +440,7 @@ mod tests {
                 Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
                 Value::Closure(..) => panic!("Closures don't have a traced value"),
                 Value::UpvaluePtr(..) => panic!("Upvalues don't have a traced value"),
+                Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
             }
         }
     }
@@ -1306,6 +1309,69 @@ fun foo(x) {
 foo(42);
         "#,
                        "42",
+        )
+    }
+
+    #[test]
+    fn upvalues_book_example() {
+        assert_printed(
+            r#"
+fun outer() {
+  var x = "outside";
+  fun inner() {
+    print x;
+  }
+  inner();
+}
+outer();
+           "#,
+            "outside",
+        )
+    }
+
+    #[test]
+    fn closed_upvalues_book_example() {
+        assert_printed(
+            r#"
+fun outer() {
+  var x = "outside";
+  fun inner() {
+    print x;
+  }
+
+  return inner;
+}
+
+
+closure = outer();
+closure();
+           "#,
+            "outside",
+        )
+    }
+
+    #[test]
+    fn values_and_variables_book_example() {
+        assert_printed(
+            r#"
+var globalSet;
+var globalGet;
+
+fun main() {
+  var a = "initial";
+
+  fun set() { a = "updated"; }
+  fun get() { print a; }
+
+  globalSet = set;
+  globalGet = get;
+}
+
+main();
+globalSet();
+globalGet();
+           "#,
+            "updated",
         )
     }
 }
