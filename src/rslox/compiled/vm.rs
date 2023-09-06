@@ -1,6 +1,6 @@
 use std::borrow::ToOwned;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::convert::TryInto;
+use std::convert::{TryInto, TryFrom};
 use std::io::Write;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -188,7 +188,7 @@ impl CallFrame {
         macro_rules! binary {
                 ($l:tt) => {{
                     let popped = stack.borrow_mut().pop().unwrap();
-                    let v1 = self.try_number(&popped, stringify!($l), *line)?;
+                    let v1: f64 = self.try_into_err(&popped, stringify!($l), *line)?;
                     self.update_top_number(stringify!($l), *line, |n| n $l v1)
                 }}
             }
@@ -281,22 +281,21 @@ impl CallFrame {
                 *stack.borrow_mut().last_mut().unwrap() = Value::Bool(v1 == old_v2);
             }
             OpCode::Greater => {
-                let v1 = self.try_number(&stack.borrow_mut().pop().unwrap(), "Greater lhs", *line)?;
-                let v2 = self.try_number(
+                let v1: f64 = self.try_into_err(&stack.borrow_mut().pop().unwrap(), "Greater lhs", *line)?;
+                let v2: f64 = self.try_into_err(
                     &stack.borrow().last().cloned().unwrap(), "Greater rhs", *line)?;
                 *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 > v1);
             }
             OpCode::Less => {
-                let v1 = self.try_number(&stack.borrow_mut().pop().unwrap(), "Less lhs", *line)?;
-                let v2 = self.try_number(
+                let v1: f64 = self.try_into_err(&stack.borrow_mut().pop().unwrap(), "Less lhs", *line)?;
+                let v2: f64 = self.try_into_err(
                     &stack.borrow().last().cloned().unwrap(), "Less rhs", *line)?;
                 *(stack.borrow_mut().last_mut().unwrap()) = Value::Bool(v2 < v1);
             }
             OpCode::Call(arg_count) => {
                 let func_index = stack.borrow().len() - arg_count - 1;
                 let value = stack.borrow().get(func_index).cloned().unwrap();
-                let (function, upvalues) =
-                    (&value).try_into().map_err(|err: String| self.err(err, *line))?;
+                let (function, upvalues) = self.try_into_err(&value, "call", *line)?;
                 let arity = function.unwrap_upgrade().arity;
                 if arity != *arg_count {
                     return Err(self.err(
@@ -318,11 +317,9 @@ impl CallFrame {
             OpCode::Add =>
                 if stack.borrow().last().unwrap().is_string() {
                     let popped = &stack.borrow_mut().pop().unwrap();
-                    let s1: InternedString = TryInto::<InternedString>::try_into(popped).unwrap();
-                    let s2: InternedString =
-                        TryInto::<InternedString>::try_into(stack.borrow().last().unwrap())
-                            .map_err(|err|
-                                self.err(format!("{} ({})", err, "String concat"), *line))?;
+                    let s1: InternedString = popped.try_into().unwrap();
+                    let s2: InternedString = self.try_into_err(
+                        stack.borrow().last().unwrap(), "String concat", *line)?;
                     let result = self.interned_strings.get_or_insert(Rc::new(
                         format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::String(result);
@@ -346,19 +343,20 @@ impl CallFrame {
         VmError::new(msg, self.function.unwrap_upgrade().name.to_owned(), line)
     }
 
-    fn try_number(&self, value: &Value, msg: &str, line: Line) -> Result<f64, VmError> {
-        value.try_into().map_err(|err: String| self.err(format!("{} ({})", err, msg), line))
+    fn try_into_err<'a, A: TryFrom<&'a Value, Error=String>>(
+        &self, value: &'a Value, location: &str, line: Line
+    ) -> Result<A, VmError> {
+        value.try_into().map_err(|s| self.err(format!("{} ({})", s, location), line))
     }
 
     // Updates the to value of the stack to be the new number.
     fn update_top_number(
         &mut self,
-        msg: &str,
+        location: &str,
         line: Line,
         f: impl FnOnce(f64) -> f64,
     ) -> Result<(), VmError> {
-        let n = self.stack.borrow().last().unwrap().try_into()
-            .map_err(|err: String| self.err(format!("{} ({})", err, msg), line))?;
+        let n = self.try_into_err(self.stack.borrow().last().unwrap(), location, line)?;
         *self.stack.borrow_mut().last_mut().unwrap() = Value::Number(f(n));
         Ok(())
     }
