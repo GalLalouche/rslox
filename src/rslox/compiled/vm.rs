@@ -1,5 +1,5 @@
 use std::borrow::ToOwned;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::convert::{TryInto, TryFrom};
 use std::io::Write;
 use std::ops::Deref;
@@ -9,11 +9,13 @@ use linked_list::{Cursor, LinkedList};
 use nonempty::NonEmpty;
 
 use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
-use crate::rslox::compiled::chunk::{Chunk, InternedString, InternedStrings, Upvalue};
+use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
-use crate::rslox::compiled::op_code::{OpCode, StackLocation};
+use crate::rslox::compiled::op_code::{OpCode, StackLocation, InternedString};
 use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
+
+use super::compiler::InternedStrings;
 
 type FunctionName = String;
 
@@ -40,7 +42,9 @@ struct VirtualMachine {
 }
 
 impl VirtualMachine {
-    pub fn run(chunk: Chunk, writer: &mut impl Write) -> Result<Vec<Value>, VmError> {
+    pub fn run(
+        chunk: Chunk, interned_strings: InternedStrings, writer : &mut impl Write
+    ) -> Result<Vec<Value>, VmError> {
         let name = Rc::new("<script>".to_owned());
         let script = Rc::new(Function { name: GcWeak::from(&name), arity: 0, chunk });
         let stack: RcRc<Vec<Value>> = Default::default();
@@ -48,6 +52,7 @@ impl VirtualMachine {
         let upvalues = Upvalues::new(Vec::new());
         let open_upvalues = rcrc(LinkedList::new());
         let closed_upvalues = rcrc(Vec::new());
+        let rc_interned_strings = rcrc(interned_strings);
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
             (&script).into(),
@@ -55,6 +60,7 @@ impl VirtualMachine {
             upvalues,
             stack.clone(),
             globals,
+            rc_interned_strings,
             open_upvalues,
             closed_upvalues,
         );
@@ -103,27 +109,9 @@ impl VirtualMachine {
 type InstructionPointer = usize;
 
 #[derive(Debug, Clone)]
-struct CallFrameInternedStrings {
-    original: GcWeak<InternedStrings>,
-    working: InternedStrings,
-}
-
-impl CallFrameInternedStrings {
-    pub fn new(original: GcWeak<InternedStrings>) -> Self {
-        CallFrameInternedStrings { original, working: HashSet::new() }
-    }
-
-    pub fn get_or_insert(&mut self, str: Rc<String>) -> GcWeak<String> {
-        GcWeak::from(self.original.unwrap_upgrade().get(str.deref()).unwrap_or_else(|| {
-            self.working.get_or_insert(str)
-        }))
-    }
-}
-
-#[derive(Debug, Clone)]
 struct CallFrame {
     ip: InstructionPointer,
-    interned_strings: CallFrameInternedStrings,
+    interned_strings: RcRc<InternedStrings>,
     function: GcWeak<Function>,
     stack: RcRc<Vec<Value>>,
     closure_upvalues: Upvalues,
@@ -144,11 +132,10 @@ impl CallFrame {
         upvalues: Upvalues,
         stack: RcRc<Vec<Value>>,
         globals: RcRc<HashMap<String, Value>>,
+        interned_strings: RcRc<InternedStrings>,
         open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
         closed_upvalues: RcRc<Vec<RcRc<PointedUpvalue>>>,
     ) -> Self {
-        let interned_strings = CallFrameInternedStrings::new(
-            function.clone().unwrap_upgrade().chunk.get_interned_strings());
         CallFrame {
             ip,
             interned_strings,
@@ -310,6 +297,7 @@ impl CallFrame {
                     upvalues,
                     stack.clone(),
                     globals.clone(),
+                    self.interned_strings.clone(),
                     self.open_upvalues.clone(),
                     self.closed_upvalues.clone(),
                 )));
@@ -320,8 +308,8 @@ impl CallFrame {
                     let s1: InternedString = popped.try_into().unwrap();
                     let s2: InternedString = self.try_into_err(
                         stack.borrow().last().unwrap(), "String concat", *line)?;
-                    let result = self.interned_strings.get_or_insert(Rc::new(
-                        format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade())));
+                    let result = self.interned_strings.borrow_mut().intern_string(
+                        format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade()));
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::String(result);
                 } else {
                     binary!(+)?
@@ -457,23 +445,23 @@ mod tests {
 
 
     fn final_res(lines: Vec<&str>) -> TracedValue {
-        let mut compiled = unsafe_compile(lines);
+        let (mut compiled, interned_strings) = unsafe_compile(lines);
         // // Comment this in for debugging the compiled program.
         // eprintln!("disassembled:\n{}", crate::rslox::compiled::compiler::disassemble(&compiled).join("\n"));
         let code = compiled.get_code();
         // Remove the final POP to ensure the stack isn't empty
         assert_eq!(code.last().unwrap().0, OpCode::Pop);
         compiled.pop();
-        let stack = VirtualMachine::run(compiled, &mut sink()).unwrap();
+        let stack = VirtualMachine::run(compiled, interned_strings, &mut sink()).unwrap();
         stack.unwrap_single().into()
     }
 
     fn printed_string(lines: Vec<&str>) -> String {
         let mut buff = Cursor::new(Vec::new());
-        let chunk = unsafe_compile(lines);
+        let (chunk, interned_strings) = unsafe_compile(lines);
         // // Comment this in for debugging the compiled program.
         // eprintln!("disassembled:\n{}", crate::rslox::compiled::compiler::disassemble(&chunk).join("\n"));
-        VirtualMachine::run(chunk, &mut buff).unwrap();
+        VirtualMachine::run(chunk, interned_strings, &mut buff).unwrap();
         buff.get_ref().into_iter().map(|i| *i as char).collect()
     }
 
@@ -482,7 +470,8 @@ mod tests {
     }
 
     fn single_error(code: &str) -> VmError {
-        VirtualMachine::run(unsafe_compile(vec![code.trim()]), &mut sink()).unwrap_err()
+        let (chunk, interned_strings) = unsafe_compile(vec![code.trim()]);
+        VirtualMachine::run(chunk, interned_strings, &mut sink()).unwrap_err()
     }
 
     #[test]
@@ -600,7 +589,8 @@ mod tests {
 
     #[test]
     fn stack_is_empty_after_statement() {
-        let stack = VirtualMachine::run(unsafe_compile(vec!["1 + 2;"]), &mut sink()).unwrap();
+        let (chunk, interned_strings) = unsafe_compile(vec!["1 + 2;"]);
+        let stack = VirtualMachine::run(chunk, interned_strings, &mut sink()).unwrap();
         assert_eq!(stack.len(), 0);
     }
 

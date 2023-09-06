@@ -6,11 +6,13 @@ use {
     crate::rslox::common::tests::unsafe_tokenize,
     crate::rslox::compiled::chunk::Chunk,
     crate::rslox::compiled::compiler::compile,
+    super::compiler::InternedStrings,
     std::fmt::Debug,
 };
 
 #[cfg(test)]
-pub fn unsafe_compile(program: Vec<&str>) -> Chunk {
+pub fn unsafe_compile(program: Vec<&str>) -> (Chunk, InternedStrings) {
+
     compile(unsafe_tokenize(program)).expect("Failed to compile")
 }
 

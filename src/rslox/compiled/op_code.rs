@@ -1,11 +1,14 @@
-use crate::rslox::compiled::chunk::{InternedString, Upvalue};
+use crate::rslox::compiled::chunk::Upvalue;
 use crate::rslox::compiled::tests::DeepEq;
+
+use super::gc::GcWeak;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
 pub type ConstantIndex = usize;
 // including parameters
 pub type ArgCount = usize;
+pub type InternedString = GcWeak<String>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {

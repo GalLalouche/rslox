@@ -1,4 +1,7 @@
+use std::collections::HashSet;
 use std::mem;
+use std::ops::Deref;
+use std::rc::Rc;
 
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
@@ -6,10 +9,13 @@ use num_traits::FromPrimitive;
 
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
-use crate::rslox::compiled::chunk::{Chunk, InternedString, Upvalue};
+use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::value::Function;
+
+use super::gc::GcWeak;
+use super::op_code::InternedString;
 
 type CompilerError = ParserError;
 
@@ -17,9 +23,21 @@ impl From<CompilerError> for NonEmpty<CompilerError> {
     fn from(value: CompilerError) -> Self { NonEmpty::new(value) }
 }
 
-pub fn compile(tokens: Vec<Token>) -> LoxResult<Chunk> {
+pub fn compile(tokens: Vec<Token>) -> LoxResult<(Chunk, InternedStrings)> {
     convert_errors(Compiler::new(tokens).compile())
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct InternedStrings {
+    strings: HashSet<Rc<String>>,
+}
+
+impl InternedStrings {
+    pub fn intern_string(&mut self, str: String) -> InternedString {
+        GcWeak::from(self.strings.get_or_insert(Rc::new(str)))
+    }
+}
+
 
 type Depth = i64;
 
@@ -32,6 +50,7 @@ struct Compiler {
     frames: NonEmpty<FunctionContext>,
     depth: Depth,
     current: TokenPointer,
+    interned_strings: InternedStrings,
 }
 
 impl Compiler {
@@ -42,10 +61,11 @@ impl Compiler {
             frames: NonEmpty::new(top_frame),
             depth: 0,
             current: 0,
+            interned_strings: Default::default(),
         }
     }
 
-    pub fn compile(mut self) -> Result<Chunk, NonEmpty<CompilerError>> {
+    pub fn compile(mut self) -> Result<(Chunk, InternedStrings), NonEmpty<CompilerError>> {
         let mut errors = Vec::new();
         while !self.is_at_end() {
             self.declaration(&mut errors);
@@ -53,7 +73,7 @@ impl Compiler {
         match NonEmpty::from_vec(errors) {
             None => {
                 assert_eq!(self.frames.len(), 1);
-                Ok(self.frames.head.chunk)
+                Ok((self.frames.head.chunk, self.interned_strings))
             }
             Some(errs) => Err(errs),
         }
@@ -344,7 +364,7 @@ impl Compiler {
                             "Redefined variable '{}' in same scope",
                             name.unwrap_upgrade()),
                         token: Token {
-                            r#type: TokenType::identifier(name.to_owned()),
+                            r#type: TokenType::identifier(name.unwrap_upgrade().deref().to_owned()),
                             line,
                         },
                     });
@@ -576,7 +596,7 @@ impl Compiler {
     }
 
     fn intern_string(&mut self, str: String) -> InternedString {
-        self.active_frame_mut().chunk.intern_string(str)
+        self.interned_strings.intern_string(str)
     }
 }
 
@@ -623,7 +643,7 @@ impl FunctionContext {
                 return Err(CompilerError::new(
                     format!(
                         "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
-                    Token::new(line, TokenType::identifier(name.to_owned())),
+                    Token::new(line, TokenType::identifier(name.unwrap_upgrade().deref().to_owned())),
                 ));
             }
             if name.compare_values(&local.name) {
@@ -636,8 +656,7 @@ impl FunctionContext {
     pub fn resolve_local_for_upvalue(&mut self, name: &InternedString) -> Option<StackLocation> {
         for (index, local) in self.locals.iter().enumerate() {
             assert!(!local.is_uninitialized());
-            if name.compare_values(&local.name) {
-                assert_ne!(name, &local.name);
+            if name == &local.name {
                 self.locals[index].is_captured = true;
                 return Some(index);
             }
@@ -793,7 +812,7 @@ mod tests {
     }
     fn assert_bytecode(code: &str, expected: &str) -> () {
         use pretty_assertions_sorted::assert_eq;
-        let string = disassemble(&unsafe_compile(vec![code.trim()])).join("\n");
+        let string = disassemble(&unsafe_compile(vec![code.trim()]).0).join("\n");
         assert_eq!(
             expected.trim().lines().collect::<Vec<_>>(),
             TRIMMER.replace_all(string.trim(), "\n").lines().collect::<Vec<_>>()

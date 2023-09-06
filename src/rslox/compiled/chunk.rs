@@ -1,5 +1,4 @@
 use std::borrow::Borrow;
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -33,7 +32,6 @@ pub type Line = usize;
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Chunk {
     code: Code,
-    interned_strings: Rc<HashSet<Rc<String>>>,
     functions: Vec<Rc<Function>>,
 }
 
@@ -43,13 +41,7 @@ pub struct Upvalue {
     pub is_local: bool,
 }
 
-pub type InternedString = GcWeak<String>;
-pub type InternedStrings = HashSet<Rc<String>>;
-
 impl Chunk {
-    pub fn intern_string(&mut self, str: String) -> InternedString {
-        GcWeak::from(Rc::get_mut(&mut self.interned_strings).unwrap().get_or_insert(Rc::new(str)))
-    }
     pub fn write(&mut self, op: OpCode, line: Line) -> CodeLocation {
         self.code.write(op, line)
     }
@@ -68,22 +60,17 @@ impl Chunk {
     pub fn pop(&mut self) -> (OpCode, Line) { self.code.pop() }
 
     pub fn get_code(&self) -> &Code { &self.code }
-    pub fn get_interned_strings(&self) -> GcWeak<InternedStrings> {
-        GcWeak::from(self.interned_strings.borrow())
-    }
     pub fn function_count(&self) -> usize { self.functions.len() }
     pub fn get_function(&self, i: usize) -> GcWeak<Function> {
         GcWeak::from(&self.functions[i].clone())
     }
 
-    pub fn to_tuple(self) -> (Code, InternedStrings, Vec<Rc<Function>>) {
-        (self.code, Rc::into_inner(self.interned_strings).unwrap(), self.functions)
-    }
+    pub fn to_tuple(self) -> (Code, Vec<Rc<Function>>) { (self.code, self.functions) }
 }
 
 impl DeepEq for Chunk {
     fn deep_eq(&self, other: &Self) -> bool {
-        self.code.deep_eq(&other.code) && self.interned_strings == other.interned_strings &&
+        self.code.deep_eq(&other.code) &&
             self.functions.deep_eq(&other.functions)
     }
 }
