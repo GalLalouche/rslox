@@ -4,10 +4,10 @@ use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::rslox::compiled::code::Code;
-use crate::rslox::compiled::gc::GcWeak;
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::tests::DeepEq;
 use crate::rslox::compiled::value::Function;
+use crate::rslox::compiled::weak::GcWeak;
 
 // Overriding for Borrow
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

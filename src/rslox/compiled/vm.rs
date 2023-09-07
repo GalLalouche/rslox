@@ -11,9 +11,9 @@ use nonempty::NonEmpty;
 use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
 use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
-use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation, InternedString};
 use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
+use crate::rslox::compiled::weak::{GcWeak, GcWeakMut};
 
 use super::compiler::InternedStrings;
 

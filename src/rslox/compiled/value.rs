@@ -3,9 +3,9 @@ use std::ops::Deref;
 
 use crate::rslox::common::utils::{RcRc, rcrc};
 use crate::rslox::compiled::chunk::Chunk;
-use crate::rslox::compiled::gc::{GcWeak, GcWeakMut};
 use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
+use crate::rslox::compiled::weak::{GcWeak, GcWeakMut};
 
 use super::op_code::InternedString;
 

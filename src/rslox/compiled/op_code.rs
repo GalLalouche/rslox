@@ -1,7 +1,7 @@
 use crate::rslox::compiled::chunk::Upvalue;
 use crate::rslox::compiled::tests::DeepEq;
 
-use super::gc::GcWeak;
+use super::weak::GcWeak;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
@@ -14,7 +14,7 @@ pub type InternedString = GcWeak<String>;
 pub enum OpCode {
     Return,
     Pop,
-    // A more efficient variant of the above, used by function returns.
+    // A more efficient variant of the above, used by function returns and block ends.
     PopN(usize),
     Print,
     Function(ConstantIndex, Vec<Upvalue>),

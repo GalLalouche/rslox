@@ -14,7 +14,7 @@ use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::value::Function;
 
-use super::gc::GcWeak;
+use super::weak::GcWeak;
 use super::op_code::InternedString;
 
 type CompilerError = ParserError;

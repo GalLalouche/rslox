@@ -1,8 +1,8 @@
+mod chunk;
 mod code;
-mod gc;
-mod op_code;
 mod compiler;
+mod op_code;
 mod tests;
 mod value;
 mod vm;
-mod chunk;
+mod weak;
