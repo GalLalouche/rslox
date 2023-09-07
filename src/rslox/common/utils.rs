@@ -1,10 +1,11 @@
 use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fmt::Debug;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use nonempty::NonEmpty;
 
 pub type RcRc<A> = Rc<RefCell<A>>;
+pub type WeakRc<A> = Weak<RefCell<A>>;
 
 pub fn rcrc<A>(a: A) -> RcRc<A> {
     Rc::new(RefCell::new(a))

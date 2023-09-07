@@ -1,21 +1,18 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use std::mem;
-use std::ops::Deref;
-use std::rc::Rc;
 
 use either::Either::{Left, Right};
 use nonempty::NonEmpty;
 use num_traits::FromPrimitive;
 
+use crate::format_interned;
 use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
+use crate::rslox::compiled::memory::{InternedString, Managed};
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::value::Function;
-
-use super::weak::GcWeak;
-use super::op_code::InternedString;
 
 type CompilerError = ParserError;
 
@@ -27,21 +24,15 @@ pub fn compile(tokens: Vec<Token>) -> LoxResult<(Chunk, InternedStrings)> {
     convert_errors(Compiler::new(tokens).compile())
 }
 
-type IsUsed = bool;
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 pub struct InternedStrings {
-    strings: HashMap<Rc<String>, IsUsed>,
+    strings: HashSet<Managed<String>>
 }
 
 impl InternedStrings {
     pub fn intern_string(&mut self, str: String) -> InternedString {
-        let rc = Rc::new(str);
-        if let Some((k, _)) = self.strings.get_key_value(&rc) {
-            GcWeak::from(k)
-        } else {
-            self.strings.insert(rc.clone(), false as IsUsed);
-            GcWeak::from(&rc)
-        }
+        let managed = Managed::new(str);
+        self.strings.get_or_insert(managed).ptr()
     }
 }
 
@@ -367,11 +358,9 @@ impl Compiler {
                 }
                 if &name == local_name {
                     return Err(CompilerError {
-                        message: format!(
-                            "Redefined variable '{}' in same scope",
-                            name.unwrap_upgrade()),
+                        message: format_interned!("Redefined variable '{}' in same scope", name),
                         token: Token {
-                            r#type: TokenType::identifier(name.unwrap_upgrade().deref().to_owned()),
+                            r#type: TokenType::identifier(name.to_owned()),
                             line,
                         },
                     });
@@ -648,9 +637,8 @@ impl FunctionContext {
         for (index, local) in self.locals.iter().enumerate() {
             if local.is_uninitialized() {
                 return Err(CompilerError::new(
-                    format!(
-                        "Expression uses uninitialized local variable '{}'", name.unwrap_upgrade()),
-                    Token::new(line, TokenType::identifier(name.unwrap_upgrade().deref().to_owned())),
+                    format_interned!("Expression uses uninitialized local variable '{}'", name),
+                    Token::new(line, TokenType::identifier(name.to_owned())),
                 ));
             }
             if name.compare_values(&local.name) {
@@ -770,16 +758,16 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
                     .collect::<Vec<_>>()
                     .join(","),
             ),
-            OpCode::DefineGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
-            OpCode::GetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
-            OpCode::SetGlobal(name) => format!("'{}'", name.unwrap_upgrade()),
+            OpCode::DefineGlobal(name) => format_interned!("'{}'", name),
+            OpCode::GetGlobal(name) => format_interned!("'{}'", name),
+            OpCode::SetGlobal(name) => format_interned!("'{}'", name),
             OpCode::GetUpvalue(index) => format!("'{}'", index),
             OpCode::SetUpvalue(index) => format!("'{}'", index),
             OpCode::DefineLocal(index) => format!("{}", index),
             OpCode::GetLocal(index) => format!("{}", index),
             OpCode::SetLocal(index) => format!("{}", index),
             OpCode::Bool(bool) => format!("{}", bool),
-            OpCode::String(s) => format!("'{}'", s.unwrap_upgrade()),
+            OpCode::String(s) => format_interned!("'{}'", s),
             OpCode::Call(arg_count) => format!("'{}'", arg_count),
             OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
             OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
@@ -791,11 +779,11 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
         is_first = false;
     }
     for i in 0..chunk.function_count() {
-        let function = chunk.get_function(i);
-        let name = function.unwrap_upgrade().name.unwrap_upgrade();
-        result.push(format!("<fun {}>", name));
-        result.append(&mut disassemble(&function.unwrap_upgrade().chunk));
-        result.push(format!("<end {}>", name));
+        let temp = chunk.get_function(i).upgrade().unwrap();
+        let name = &temp.name;
+        result.push(format_interned!("<fun {}>", name));
+        result.append(&mut disassemble(&temp.chunk));
+        result.push(format_interned!("<end {}>", name));
     }
     result
 }

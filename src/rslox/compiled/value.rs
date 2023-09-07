@@ -1,13 +1,13 @@
 use std::convert::{TryFrom, TryInto};
 use std::ops::Deref;
+use std::rc::Weak;
 
-use crate::rslox::common::utils::{RcRc, rcrc};
+use crate::format_interned;
+use crate::rslox::common::utils::{RcRc, rcrc, WeakRc};
 use crate::rslox::compiled::chunk::Chunk;
+use crate::rslox::compiled::memory::{InternedString, Pointer};
 use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::weak::{GcWeak, GcWeakMut};
-
-use super::op_code::InternedString;
 
 /// Note that Value implements a *shallow* clone. This follows the semantics of lox, since primitive
 /// values ([Value::Bool] and [Value::Number], basically) have value semantics, and other types,
@@ -25,15 +25,22 @@ pub enum Value {
     Nil,
     TemporaryPlaceholder,
     String(InternedString),
-    Closure(GcWeak<Function>, Upvalues),
-    UpvaluePtr(GcWeakMut<PointedUpvalue>),
+    // We can use a Weak reference to the function, since it exists in the bytecode and will never
+    // be collected.
+    Closure(Weak<Function>, Upvalues),
+    UpvaluePtr(Pointer<PointedUpvalue>),
+}
+
+impl Pointer<PointedUpvalue> {
+    fn deep_apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B { self.apply(|p| p.apply(f)) }
+    fn deep_set(&mut self, new_value: Value) { self.mutate(|p| p.set(new_value)) }
 }
 
 impl Value {
     pub fn is_string(&self) -> bool {
         match &self {
             Value::String(_) => true,
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|v| v.is_string()),
+            Value::UpvaluePtr(v) => v.deep_apply(|v| v.is_string()),
             _ => false,
         }
     }
@@ -41,7 +48,7 @@ impl Value {
     pub fn set(&mut self, value: Value) {
         assert_ne!(value, Value::TemporaryPlaceholder);
         match self {
-            Value::UpvaluePtr(ref mut v) => v.unwrap_upgrade().borrow_mut().set(value),
+            Value::UpvaluePtr(ref mut v) => v.deep_set(value),
             _ => *self = value,
         }
     }
@@ -51,16 +58,16 @@ impl Value {
             Value::Number(f) => f.to_string(),
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
-            Value::String(s) => s.unwrap_upgrade().to_string(),
-            Value::Closure(f, _) => f.unwrap_upgrade().stringify(),
-            Value::UpvaluePtr(value) => value.unwrap_upgrade().borrow().apply(|e| e.stringify()),
+            Value::String(s) => s.to_owned(),
+            Value::Closure(f, _) => f.upgrade().unwrap().stringify(),
+            Value::UpvaluePtr(value) => value.deep_apply(|e| e.stringify()),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
         }
     }
 
     pub fn pp_debug(&self) -> String {
         match self {
-            Value::UpvaluePtr(v) => format!("upv: {}", v.unwrap_upgrade().borrow().pp_debug()),
+            Value::UpvaluePtr(v) => format!("upv: {}", v.deep_apply(|e| e.pp_debug())),
             e => e.stringify(),
         }
     }
@@ -71,7 +78,7 @@ impl Value {
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
             Value::Nil => true,
             Value::Bool(false) => true,
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|v| v.is_falsey()),
+            Value::UpvaluePtr(v) => v.deep_apply(|v| v.is_falsey()),
             _ => false,
         }
     }
@@ -101,19 +108,19 @@ impl TryFrom<&Value> for f64 {
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Number(f) => Ok(*f),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Number, but found {:?}", e)),
         }
     }
 }
 
-impl<'a> TryFrom<&'a Value> for (GcWeak<Function>, Upvalues) {
+impl<'a> TryFrom<&'a Value> for (Weak<Function>, Upvalues) {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Closure(f, uv) => Ok((f.clone(), uv.clone())),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Closure, but found {:?}", e)),
         }
     }
@@ -125,7 +132,7 @@ impl<'a> TryFrom<&'a Value> for bool {
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
         match &value {
             Value::Bool(b) => Ok(*b),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Bool, but found {:?}", e)),
         }
     }
@@ -137,14 +144,10 @@ impl<'a> TryFrom<&'a Value> for InternedString {
     fn try_from(value: &'a Value) -> Result<Self, Self::Error> {
         match &value {
             Value::String(s) => Ok(s.clone()),
-            Value::UpvaluePtr(v) => v.unwrap_upgrade().borrow().apply(|e| e.try_into()),
+            Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::String, but found {:?}", e)),
         }
     }
-}
-
-impl InternedString {
-    pub fn to_owned(&self) -> String { self.unwrap_upgrade().deref().clone() }
 }
 
 /// An encapsulating wrapper on top of [PointedUpvalueImpl].
@@ -163,21 +166,20 @@ pub type IsUsed = bool;
 /// type, moving from open to closed.
 #[derive(Debug, Clone)]
 enum PointedUpvalueImpl {
-    Open(StackLocation, GcWeakMut<Vec<Value>>),
+    Open(StackLocation, WeakRc<Vec<Value>>),
     Closed(RcRc<Value>, IsUsed),
 }
 
 impl PointedUpvalue {
-    pub fn open(index: usize, stack: GcWeakMut<Vec<Value>>) -> Self {
+    pub fn open(index: usize, stack: WeakRc<Vec<Value>>) -> Self {
         PointedUpvalue(PointedUpvalueImpl::Open(index, stack))
     }
 
     pub fn close(&mut self) {
-        match &self.0 {
-            PointedUpvalueImpl::Open(i, v) => {
-                assert!(!v.unwrap_upgrade().borrow().is_empty());
+        match &mut self.0 {
+            PointedUpvalueImpl::Open(i, ref mut v) => {
                 let value = std::mem::replace(
-                    &mut v.unwrap_upgrade().borrow_mut()[*i], Value::TemporaryPlaceholder);
+                    &mut v.upgrade().unwrap().borrow_mut()[*i], Value::TemporaryPlaceholder);
                 *self = PointedUpvalue(PointedUpvalueImpl::Closed(rcrc(value), false as IsUsed));
             }
             PointedUpvalueImpl::Closed(..) => panic!("Can't close a closed value!")
@@ -186,8 +188,8 @@ impl PointedUpvalue {
 
     pub fn set(&mut self, value: Value) {
         assert!(!value.is_upvalue_ptr());
-        match &self.0 {
-            PointedUpvalueImpl::Open(i, s) => s.unwrap_upgrade().borrow_mut()[*i] = value,
+        match &mut self.0 {
+            PointedUpvalueImpl::Open(i, s) => s.upgrade().unwrap().borrow_mut()[*i] = value,
             PointedUpvalueImpl::Closed(v,..) => v.borrow_mut().set(value),
         }
     }
@@ -208,7 +210,7 @@ impl PointedUpvalue {
 
     fn apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B {
         match &self.0 {
-            PointedUpvalueImpl::Open(i, s) => f(s.unwrap_upgrade().borrow().get(*i).unwrap()),
+            PointedUpvalueImpl::Open(i, s) => f(s.upgrade().unwrap().borrow().get(*i).unwrap()),
             PointedUpvalueImpl::Closed(v, ..) => f(v.borrow().deref()),
         }
     }
@@ -216,7 +218,7 @@ impl PointedUpvalue {
 
 /// A compiled function, as opposed to a [Value::Closure] which is a specific runtime value,
 /// including its, well, closure.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Function {
     pub name: InternedString,
     pub arity: usize,
@@ -224,7 +226,7 @@ pub struct Function {
 }
 
 impl Function {
-    pub fn stringify(&self) -> String { format!("<fn {}>", self.name.to_owned()) }
+    pub fn stringify(&self) -> String { format_interned!("<fn {}>", self.name) }
 }
 
 impl DeepEq for Function {
@@ -254,21 +256,21 @@ impl DeepEq for Function {
 /// In the above example, both f and g refer to the same underlying x, and so both modify it.
 #[derive(Debug, Clone)]
 pub struct Upvalues {
-    upvalues: RcRc<Vec<GcWeakMut<PointedUpvalue>>>,
+    upvalues: RcRc<Vec<Pointer<PointedUpvalue>>>,
 }
 
 impl Upvalues {
-    pub fn new(upvalues: Vec<GcWeakMut<PointedUpvalue>>) -> Self {
+    pub fn new(upvalues: Vec<Pointer<PointedUpvalue>>) -> Self {
         Upvalues { upvalues: rcrc(upvalues) }
     }
 
-    pub fn get(&self, index: StackLocation) -> GcWeakMut<PointedUpvalue> {
+    pub fn get(&self, index: StackLocation) -> Pointer<PointedUpvalue> {
         self.upvalues.borrow()[index].clone()
     }
 
     // The &mut self is here to protected against modifications, since we do modify the internal
     // upvalue.
     pub fn set(&mut self, index: StackLocation, value: Value) {
-        self.upvalues.borrow()[index].unwrap_upgrade().borrow_mut().set(value)
+        self.upvalues.borrow_mut()[index].deep_set(value)
     }
 }

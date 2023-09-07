@@ -6,8 +6,8 @@ use {
     crate::rslox::common::tests::unsafe_tokenize,
     crate::rslox::compiled::chunk::Chunk,
     crate::rslox::compiled::compiler::compile,
-    super::compiler::InternedStrings,
     std::fmt::Debug,
+    super::compiler::InternedStrings,
 };
 
 #[cfg(test)]

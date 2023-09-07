@@ -1,13 +1,12 @@
 use std::borrow::Borrow;
 use std::fmt::Debug;
 use std::ops::Deref;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use crate::rslox::compiled::code::Code;
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::tests::DeepEq;
 use crate::rslox::compiled::value::Function;
-use crate::rslox::compiled::weak::GcWeak;
 
 // Overriding for Borrow
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -29,7 +28,7 @@ pub type Line = usize;
 
 // Unlike the book, I don't use constants for numbers.
 
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, PartialEq, Default)]
 pub struct Chunk {
     code: Code,
     functions: Vec<Rc<Function>>,
@@ -61,9 +60,7 @@ impl Chunk {
 
     pub fn get_code(&self) -> &Code { &self.code }
     pub fn function_count(&self) -> usize { self.functions.len() }
-    pub fn get_function(&self, i: usize) -> GcWeak<Function> {
-        GcWeak::from(&self.functions[i].clone())
-    }
+    pub fn get_function(&self, i: usize) -> Weak<Function> { Rc::downgrade(&self.functions[i]) }
 
     pub fn to_tuple(self) -> (Code, Vec<Rc<Function>>) { (self.code, self.functions) }
 }

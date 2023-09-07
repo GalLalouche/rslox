@@ -1,14 +1,12 @@
 use crate::rslox::compiled::chunk::Upvalue;
+use crate::rslox::compiled::memory::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
-
-use super::weak::GcWeak;
 
 pub type CodeLocation = usize;
 pub type StackLocation = usize;
 pub type ConstantIndex = usize;
 // including parameters
 pub type ArgCount = usize;
-pub type InternedString = GcWeak<String>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum OpCode {
@@ -55,12 +53,9 @@ impl Eq for &OpCode {}
 impl DeepEq for OpCode {
     fn deep_eq(&self, other: &Self) -> bool {
         match (&self, &other) {
-            (OpCode::DefineGlobal(s1), OpCode::DefineGlobal(s2)) =>
-                s1.unwrap_upgrade() == s2.unwrap_upgrade(),
-            (OpCode::GetGlobal(s1), OpCode::GetGlobal(s2)) =>
-                s1.unwrap_upgrade() == s2.unwrap_upgrade(),
-            (OpCode::String(s1), OpCode::String(s2)) =>
-                s1.unwrap_upgrade() == s2.unwrap_upgrade(),
+            (OpCode::DefineGlobal(s1), OpCode::DefineGlobal(s2)) => s1 == s2,
+            (OpCode::GetGlobal(s1), OpCode::GetGlobal(s2)) => s1 == s2,
+            (OpCode::String(s1), OpCode::String(s2)) => s1 == s2,
             _ => self == other
         }
     }

@@ -1,19 +1,20 @@
 use std::borrow::ToOwned;
 use std::collections::{HashMap, VecDeque};
-use std::convert::{TryInto, TryFrom};
+use std::convert::{TryFrom, TryInto};
 use std::io::Write;
 use std::ops::Deref;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use linked_list::{Cursor, LinkedList};
 use nonempty::NonEmpty;
 
+use crate::format_interned;
 use crate::rslox::common::utils::{RcRc, rcrc, Truncateable};
 use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
-use crate::rslox::compiled::op_code::{OpCode, StackLocation, InternedString};
+use crate::rslox::compiled::memory::{InternedString, Managed, Pointer};
+use crate::rslox::compiled::op_code::{OpCode, StackLocation};
 use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
-use crate::rslox::compiled::weak::{GcWeak, GcWeakMut};
 
 use super::compiler::InternedStrings;
 
@@ -36,26 +37,26 @@ impl VmError {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct VirtualMachine {
     frames: NonEmpty<CallFrame>,
 }
 
 impl VirtualMachine {
     pub fn run(
-        chunk: Chunk, interned_strings: InternedStrings, writer : &mut impl Write
+        chunk: Chunk, interned_strings: InternedStrings, writer: &mut impl Write,
     ) -> Result<Vec<Value>, VmError> {
-        let name = Rc::new("<script>".to_owned());
-        let script = Rc::new(Function { name: GcWeak::from(&name), arity: 0, chunk });
+        let name = Managed::new("<script>".to_owned());
+        let script = Rc::new(Function { name: name.ptr(), arity: 0, chunk });
         let stack: RcRc<Vec<Value>> = Default::default();
-        let globals: RcRc<HashMap<String, Value>> = Default::default();
+        let globals: RcRc<HashMap<InternedString, Value>> = Default::default();
         let upvalues = Upvalues::new(Vec::new());
         let open_upvalues = rcrc(LinkedList::new());
         let closed_upvalues = rcrc(Vec::new());
         let rc_interned_strings = rcrc(interned_strings);
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
-            (&script).into(),
+            Rc::downgrade(&script),
             0 as StackLocation,
             upvalues,
             stack.clone(),
@@ -69,7 +70,7 @@ impl VirtualMachine {
             match vm.go(writer) {
                 Err(ref mut err) => {
                     for f in vm.frames.iter().rev().skip(1) {
-                        err.prepend(f.name(), f.current_line())
+                        err.prepend(f.function.upgrade().unwrap().name.to_owned(), f.current_line())
                     }
                     return Err(err.clone());
                 }
@@ -85,7 +86,7 @@ impl VirtualMachine {
             let line = active_frame.current_line();
             return Err(VmError::new(
                 "Stack overflow! Wheeeee!".to_owned(),
-                active_frame.function.unwrap_upgrade().name.to_owned(),
+                active_frame.function.upgrade().unwrap().name.to_owned(),
                 line,
             ));
         }
@@ -108,33 +109,32 @@ impl VirtualMachine {
 
 type InstructionPointer = usize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct CallFrame {
     ip: InstructionPointer,
     interned_strings: RcRc<InternedStrings>,
-    function: GcWeak<Function>,
+    function: Weak<Function>,
     stack: RcRc<Vec<Value>>,
     closure_upvalues: Upvalues,
-    globals: RcRc<HashMap<String, Value>>,
-    open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
-    closed_upvalues: RcRc<Vec<RcRc<PointedUpvalue>>>,
+    globals: RcRc<HashMap<InternedString, Value>>,
+    open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
+    closed_upvalues: RcRc<Vec<Managed<PointedUpvalue>>>,
     stack_index: usize,
 }
 
 static MAX_FRAMES: usize = 10000;
 
 impl CallFrame {
-    pub fn name(&self) -> String { self.function.unwrap_upgrade().name.to_owned() }
     pub fn new(
         ip: InstructionPointer,
-        function: GcWeak<Function>,
+        function: Weak<Function>,
         stack_index: StackLocation,
         upvalues: Upvalues,
         stack: RcRc<Vec<Value>>,
-        globals: RcRc<HashMap<String, Value>>,
+        globals: RcRc<HashMap<InternedString, Value>>,
         interned_strings: RcRc<InternedStrings>,
-        open_upvalues: RcRc<LinkedList<RcRc<PointedUpvalue>>>,
-        closed_upvalues: RcRc<Vec<RcRc<PointedUpvalue>>>,
+        open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
+        closed_upvalues: RcRc<Vec<Managed<PointedUpvalue>>>,
     ) -> Self {
         CallFrame {
             ip,
@@ -149,14 +149,16 @@ impl CallFrame {
         }
     }
     pub fn current_line(&self) -> Line {
-        self.function.unwrap_upgrade().chunk.get_code().get(self.ip).unwrap().1
+        self.function.upgrade().unwrap().chunk.get_code().get(self.ip).unwrap().1
     }
     pub fn unfinished(&self) -> bool {
-        self.ip < self.function.unwrap_upgrade().chunk.get_code().len()
+        self.ip < self.chunk_length()
+    }
+    fn chunk_length(&self) -> usize {
+        self.function.upgrade().unwrap().chunk.get_code().len()
     }
     pub fn run(&mut self, writer: &mut impl Write) -> Result<Option<CallFrame>, VmError> {
-        let chunk = &self.function.unwrap_upgrade().chunk;
-        while self.ip < chunk.get_code().len() {
+        while self.ip < self.chunk_length() {
             if let Some(cf) = self.next(writer)? {
                 return Ok(Some(cf));
             }
@@ -166,7 +168,7 @@ impl CallFrame {
     }
 
     fn next(&mut self, writer: &mut impl Write) -> Result<Option<CallFrame>, VmError> {
-        let chunk = &self.function.unwrap_upgrade().chunk;
+        let chunk = &&self.function.upgrade().unwrap().chunk;
         let code = chunk.get_code();
         let instructions = code.instructions();
         let stack = self.stack.clone();
@@ -210,7 +212,11 @@ impl CallFrame {
                             enclosing_upvalues.get(*index)
                         });
                 }
-                stack.borrow_mut().push(Value::Closure(chunk.get_function(*i), Upvalues::new(upvalue_ptrs)));
+                stack.borrow_mut().push(
+                    Value::Closure(
+                        self.function.upgrade().unwrap().chunk.get_function(*i),
+                        Upvalues::new(upvalue_ptrs),
+                    ));
             }
             OpCode::CloseUpvalue => self.close_upvalues(self.stack_index),
             OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
@@ -224,19 +230,18 @@ impl CallFrame {
             OpCode::Jump(index) =>
                 self.ip = *index - 1, // ip will increase by one after we exit this pattern match.
             OpCode::GetGlobal(name) => {
-                let rc = name.unwrap_upgrade();
-                let value = globals.borrow().get(rc.deref()).cloned().ok_or_else(
-                    || self.err(format!("Unrecognized identifier '{}'", rc), *line))?;
+                let value = globals.borrow().get(name).cloned().ok_or_else(
+                    || self.err(format_interned!("Unrecognized identifier '{}'", name), *line))?;
                 stack.borrow_mut().push(value.clone());
             }
             OpCode::DefineGlobal(name) => {
                 let value = stack.borrow_mut().pop().unwrap();
-                globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value);
+                globals.borrow_mut().insert(name.clone(), value);
             }
             OpCode::SetGlobal(name) => {
                 // We not pop on assignment, to allow for chaining.
                 let value = stack.borrow().last().cloned().unwrap();
-                globals.borrow_mut().insert(name.unwrap_upgrade().deref().to_owned(), value.clone());
+                globals.borrow_mut().insert(name.clone(), value.clone());
             }
             OpCode::GetUpvalue(index) =>
                 stack.borrow_mut().push(Value::UpvaluePtr(self.closure_upvalues.get(*index).clone())),
@@ -283,8 +288,8 @@ impl CallFrame {
                 let func_index = stack.borrow().len() - arg_count - 1;
                 let value = stack.borrow().get(func_index).cloned().unwrap();
                 let (function, upvalues) = self.try_into_err(&value, "call", *line)?;
-                let arity = function.unwrap_upgrade().arity;
-                if arity != *arg_count {
+                let arity = &function.upgrade().unwrap().arity;
+                if arity != arg_count {
                     return Err(self.err(
                         format!("Expected {} arguments but got {}", arity, arg_count),
                         *line));
@@ -293,7 +298,7 @@ impl CallFrame {
                 return Ok(Some(CallFrame::new(
                     0 as InstructionPointer,
                     function,
-                    stack.borrow().len() - arity as StackLocation,
+                    stack.borrow().len() - *arity as StackLocation,
                     upvalues,
                     stack.clone(),
                     globals.clone(),
@@ -309,7 +314,7 @@ impl CallFrame {
                     let s2: InternedString = self.try_into_err(
                         stack.borrow().last().unwrap(), "String concat", *line)?;
                     let result = self.interned_strings.borrow_mut().intern_string(
-                        format!("{}{}", *s2.unwrap_upgrade(), *s1.unwrap_upgrade()));
+                        format_interned!("{}{}", s2, s1));
                     *(stack.borrow_mut().last_mut().unwrap()) = Value::String(result);
                 } else {
                     binary!(+)?
@@ -328,11 +333,13 @@ impl CallFrame {
     }
 
     fn err(&self, msg: String, line: Line) -> VmError {
-        VmError::new(msg, self.function.unwrap_upgrade().name.to_owned(), line)
+        // Comment this in to make errs panics, e.g., in case tests are failing when they shouldn't.
+        // panic!("{} @ {}", msg, line);
+        VmError::new(msg, self.function.upgrade().unwrap().name.to_owned(), line)
     }
 
     fn try_into_err<'a, A: TryFrom<&'a Value, Error=String>>(
-        &self, value: &'a Value, location: &str, line: Line
+        &self, value: &'a Value, location: &str, line: Line,
     ) -> Result<A, VmError> {
         value.try_into().map_err(|s| self.err(format!("{} ({})", s, location), line))
     }
@@ -349,41 +356,41 @@ impl CallFrame {
         Ok(())
     }
 
-    fn capture_upvalue(&mut self, index: StackLocation) -> GcWeakMut<PointedUpvalue> {
+    fn capture_upvalue(&mut self, index: StackLocation) -> Pointer<PointedUpvalue> {
         let mut ref_mut = self.open_upvalues.borrow_mut();
         let mut cursor = ref_mut.cursor();
         while let Some(head) = cursor.next() {
-            let upvalue_index = head.borrow().open_location();
+            let upvalue_index = head.as_ref().open_location();
             if upvalue_index == index {
-                return GcWeakMut::from(head.deref());
+                return head.deref().ptr();
             }
             if upvalue_index < index {
                 break;
             }
         }
-        let result = rcrc(PointedUpvalue::open(index, (&self.stack).into()));
+        let result = Managed::new(PointedUpvalue::open(index, Rc::downgrade(&self.stack)));
         cursor.prev();
-        cursor.insert(result.clone());
-        (&result).into()
+        cursor.insert(result);
+        cursor.next().unwrap().ptr()
     }
 
     fn close_upvalues(&mut self, max_stack_index: StackLocation) {
         let mut ref_mut = self.open_upvalues.borrow_mut();
-        let mut cursor: Cursor<RcRc<PointedUpvalue>> = ref_mut.cursor();
+        let mut cursor: Cursor<Managed<PointedUpvalue>> = ref_mut.cursor();
         while let Some(head) = cursor.peek_next() {
-            let upvalue_index = head.borrow().open_location();
+            let upvalue_index = head.as_ref().open_location();
             if upvalue_index < max_stack_index {
                 break;
             }
-            let next = cursor.remove().unwrap();
-            next.borrow_mut().close();
+            let mut next = cursor.remove().unwrap();
+            next.as_ref_mut().close();
             self.closed_upvalues.borrow_mut().push(next);
         }
     }
 
     fn _debug_stack(&self) -> () {
         let stack = &self.stack;
-        eprintln!("stack for {}:", self.function.unwrap_upgrade().name.unwrap_upgrade());
+        eprintln!("stack for {}:", &self.function.upgrade().unwrap().name.to_owned());
         for (i, value) in stack.borrow().iter().enumerate() {
             eprintln!("{:0>2}: {:?}", i, value.pp_debug())
         }
@@ -416,7 +423,7 @@ mod tests {
                 Value::Number(n) => TracedValue::Number(*n),
                 Value::Bool(b) => TracedValue::Bool(*b),
                 Value::Nil => TracedValue::Nil,
-                Value::String(s) => TracedValue::String(s.unwrap_upgrade().deref().to_owned()),
+                Value::String(s) => TracedValue::String(s.to_owned()),
                 Value::Closure(..) => panic!("Closures don't have a traced value"),
                 Value::UpvaluePtr(..) => panic!("Upvalues don't have a traced value"),
                 Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
