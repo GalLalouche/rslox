@@ -65,9 +65,7 @@ impl Value {
         }
     }
 
-    pub fn is_truthy(&self) -> bool {
-        !self.is_falsey()
-    }
+    pub fn is_truthy(&self) -> bool { !self.is_falsey() }
     pub fn is_falsey(&self) -> bool {
         match &self {
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
@@ -149,55 +147,69 @@ impl InternedString {
     pub fn to_owned(&self) -> String { self.unwrap_upgrade().deref().clone() }
 }
 
+/// An encapsulating wrapper on top of [PointedUpvalueImpl].
+#[derive(Debug, Clone)]
+pub struct PointedUpvalue(PointedUpvalueImpl);
+
 pub type IsUsed = bool;
-/// Like [Value], [PointedUpvalue] also performs shallow cloning. Since these are literally
-/// pointers ([PointedUpvalue::Open] is a stack pointers, and [PointedUpvalue::Closed] points to
-/// the heap), this makes sense. Notable, [PointedUpvalue::Closed] is the only place in this code
-/// base that actually *owns* its values! This will probably changed when classes are implemented.
+/// Like [Value], [PointedUpvalueImpl] also performs shallow cloning. Since these are literally
+/// pointers ([PointedUpvalueImpl::Open] is a stack pointers, and [PointedUpvalueImpl::Closed]
+/// points to the heap), this makes sense. Notably, [PointedUpvalueImpl::Closed] is the only place
+/// in this code base that actually *owns* its values! This will probably changed when classes are
+/// implemented.
 ///
-/// This struct is not very type safe, but since we want to change open upvalues to closed upvalues
-/// Without anyone knowing about it, this is the way to do it. In effect, this is an ad-hoc linear
+/// This enum is not very type safe, but since we want to change open upvalues to closed upvalues
+/// without anyone knowing about it, this is the way to do it. In effect, this is an ad-hoc linear
 /// type, moving from open to closed.
 #[derive(Debug, Clone)]
-pub enum PointedUpvalue {
+enum PointedUpvalueImpl {
     Open(StackLocation, GcWeakMut<Vec<Value>>),
     Closed(RcRc<Value>, IsUsed),
 }
 
 impl PointedUpvalue {
+    pub fn open(index: usize, stack: GcWeakMut<Vec<Value>>) -> Self {
+        PointedUpvalue(PointedUpvalueImpl::Open(index, stack))
+    }
+
     pub fn close(&mut self) {
-        match self {
-            PointedUpvalue::Open(i, v) => {
+        match &self.0 {
+            PointedUpvalueImpl::Open(i, v) => {
                 assert!(!v.unwrap_upgrade().borrow().is_empty());
                 let value = std::mem::replace(
                     &mut v.unwrap_upgrade().borrow_mut()[*i], Value::TemporaryPlaceholder);
-                *self = PointedUpvalue::Closed(rcrc(value), false as IsUsed);
+                *self = PointedUpvalue(PointedUpvalueImpl::Closed(rcrc(value), false as IsUsed));
             }
-            PointedUpvalue::Closed(..) => panic!("Can't close a closed value!")
+            PointedUpvalueImpl::Closed(..) => panic!("Can't close a closed value!")
         }
     }
-}
 
-impl PointedUpvalue {
     pub fn set(&mut self, value: Value) {
         assert!(!value.is_upvalue_ptr());
-        match self {
-            PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow_mut()[*i] = value,
-            PointedUpvalue::Closed(v,..) => v.borrow_mut().set(value),
+        match &self.0 {
+            PointedUpvalueImpl::Open(i, s) => s.unwrap_upgrade().borrow_mut()[*i] = value,
+            PointedUpvalueImpl::Closed(v,..) => v.borrow_mut().set(value),
         }
     }
 
     pub fn pp_debug(&self) -> String {
-        match self {
-            PointedUpvalue::Open(i, _) => format!("open{}", i).to_owned(),
-            PointedUpvalue::Closed(..) => "closed".to_owned(),
+        match &self.0 {
+            PointedUpvalueImpl::Open(i, _) => format!("open{}", i).to_owned(),
+            PointedUpvalueImpl::Closed(..) => "closed".to_owned(),
+        }
+    }
+
+    pub fn open_location(&self) -> StackLocation {
+        match self.0 {
+            PointedUpvalueImpl::Open(i, ..) => i,
+            PointedUpvalueImpl::Closed(..) => panic!("Closed index has no index location"),
         }
     }
 
     fn apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B {
-        match self {
-            PointedUpvalue::Open(i, s) => f(s.unwrap_upgrade().borrow().get(*i).unwrap()),
-            PointedUpvalue::Closed(v, ..) => f(v.borrow().deref()),
+        match &self.0 {
+            PointedUpvalueImpl::Open(i, s) => f(s.unwrap_upgrade().borrow().get(*i).unwrap()),
+            PointedUpvalueImpl::Closed(v, ..) => f(v.borrow().deref()),
         }
     }
 }

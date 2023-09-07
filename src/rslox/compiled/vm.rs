@@ -353,7 +353,7 @@ impl CallFrame {
         let mut ref_mut = self.open_upvalues.borrow_mut();
         let mut cursor = ref_mut.cursor();
         while let Some(head) = cursor.next() {
-            let upvalue_index = CallFrame::open_index(&head);
+            let upvalue_index = head.borrow().open_location();
             if upvalue_index == index {
                 return GcWeakMut::from(head.deref());
             }
@@ -361,7 +361,7 @@ impl CallFrame {
                 break;
             }
         }
-        let result = rcrc(PointedUpvalue::Open(index, (&self.stack).into()));
+        let result = rcrc(PointedUpvalue::open(index, (&self.stack).into()));
         cursor.prev();
         cursor.insert(result.clone());
         (&result).into()
@@ -371,20 +371,13 @@ impl CallFrame {
         let mut ref_mut = self.open_upvalues.borrow_mut();
         let mut cursor: Cursor<RcRc<PointedUpvalue>> = ref_mut.cursor();
         while let Some(head) = cursor.peek_next() {
-            let upvalue_index = CallFrame::open_index(&head);
+            let upvalue_index = head.borrow().open_location();
             if upvalue_index < max_stack_index {
                 break;
             }
             let next = cursor.remove().unwrap();
             next.borrow_mut().close();
             self.closed_upvalues.borrow_mut().push(next);
-        }
-    }
-
-    fn open_index(head: &RcRc<PointedUpvalue>) -> StackLocation {
-        match *head.borrow() {
-            PointedUpvalue::Open(location, ..) => location,
-            PointedUpvalue::Closed(..) => panic!("open_upvalues contained a closed value"),
         }
     }
 
