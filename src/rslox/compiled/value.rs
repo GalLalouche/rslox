@@ -149,6 +149,7 @@ impl InternedString {
     pub fn to_owned(&self) -> String { self.unwrap_upgrade().deref().clone() }
 }
 
+pub type IsUsed = bool;
 /// Like [Value], [PointedUpvalue] also performs shallow cloning. Since these are literally
 /// pointers ([PointedUpvalue::Open] is a stack pointers, and [PointedUpvalue::Closed] points to
 /// the heap), this makes sense. Notable, [PointedUpvalue::Closed] is the only place in this code
@@ -160,7 +161,7 @@ impl InternedString {
 #[derive(Debug, Clone)]
 pub enum PointedUpvalue {
     Open(StackLocation, GcWeakMut<Vec<Value>>),
-    Closed(RcRc<Value>),
+    Closed(RcRc<Value>, IsUsed),
 }
 
 impl PointedUpvalue {
@@ -170,9 +171,9 @@ impl PointedUpvalue {
                 assert!(!v.unwrap_upgrade().borrow().is_empty());
                 let value = std::mem::replace(
                     &mut v.unwrap_upgrade().borrow_mut()[*i], Value::TemporaryPlaceholder);
-                *self = PointedUpvalue::Closed(rcrc(value));
+                *self = PointedUpvalue::Closed(rcrc(value), false as IsUsed);
             }
-            PointedUpvalue::Closed(_) => panic!("Can't close a closed value!")
+            PointedUpvalue::Closed(..) => panic!("Can't close a closed value!")
         }
     }
 }
@@ -182,21 +183,21 @@ impl PointedUpvalue {
         assert!(!value.is_upvalue_ptr());
         match self {
             PointedUpvalue::Open(i, s) => s.unwrap_upgrade().borrow_mut()[*i] = value,
-            PointedUpvalue::Closed(v) => v.borrow_mut().set(value),
+            PointedUpvalue::Closed(v,..) => v.borrow_mut().set(value),
         }
     }
 
     pub fn pp_debug(&self) -> String {
         match self {
             PointedUpvalue::Open(i, _) => format!("open{}", i).to_owned(),
-            PointedUpvalue::Closed(_) => "closed".to_owned(),
+            PointedUpvalue::Closed(..) => "closed".to_owned(),
         }
     }
 
     fn apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B {
         match self {
             PointedUpvalue::Open(i, s) => f(s.unwrap_upgrade().borrow().get(*i).unwrap()),
-            PointedUpvalue::Closed(v) => f(v.borrow().deref()),
+            PointedUpvalue::Closed(v, ..) => f(v.borrow().deref()),
         }
     }
 }

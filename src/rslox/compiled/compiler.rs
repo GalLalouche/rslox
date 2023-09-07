@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::mem;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -27,14 +27,21 @@ pub fn compile(tokens: Vec<Token>) -> LoxResult<(Chunk, InternedStrings)> {
     convert_errors(Compiler::new(tokens).compile())
 }
 
+type IsUsed = bool;
 #[derive(Debug, Clone, Default)]
 pub struct InternedStrings {
-    strings: HashSet<Rc<String>>,
+    strings: HashMap<Rc<String>, IsUsed>,
 }
 
 impl InternedStrings {
     pub fn intern_string(&mut self, str: String) -> InternedString {
-        GcWeak::from(self.strings.get_or_insert(Rc::new(str)))
+        let rc = Rc::new(str);
+        if let Some((k, _)) = self.strings.get_key_value(&rc) {
+            GcWeak::from(k)
+        } else {
+            self.strings.insert(rc.clone(), false as IsUsed);
+            GcWeak::from(&rc)
+        }
     }
 }
 
