@@ -26,7 +26,7 @@ pub fn compile(tokens: Vec<Token>) -> LoxResult<(Chunk, InternedStrings)> {
 
 #[derive(Debug, Default)]
 pub struct InternedStrings {
-    strings: HashSet<Managed<String>>
+    strings: HashSet<Managed<String>>,
 }
 
 impl InternedStrings {
@@ -34,6 +34,13 @@ impl InternedStrings {
         let managed = Managed::new(str);
         self.strings.get_or_insert(managed).ptr()
     }
+
+    pub fn sweep(&mut self) {
+        self.strings.retain(|s| s.get_and_reset_mark())
+    }
+
+    #[allow(dead_code)]
+    pub fn len(&self) -> usize { self.strings.len() }
 }
 
 

@@ -63,6 +63,28 @@ impl Chunk {
     pub fn get_function(&self, i: usize) -> Weak<Function> { Rc::downgrade(&self.functions[i]) }
 
     pub fn to_tuple(self) -> (Code, Vec<Rc<Function>>) { (self.code, self.functions) }
+
+    pub fn mark(&self) {
+       for c in self.code.iter() {
+          match &c.0 {
+              OpCode::String(s) => s.mark(),
+              OpCode::DefineGlobal(g) => g.mark(),
+              OpCode::GetGlobal(g) => g.mark(),
+              OpCode::SetGlobal(g) => g.mark(),
+              OpCode::Return | OpCode::Pop | OpCode::PopN(_) | OpCode::Print |
+              OpCode::Function(_, _) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
+              OpCode::Number(_) | OpCode::Bool(_) | OpCode::GetUpvalue(_) | OpCode::SetUpvalue(_) |
+              OpCode::GetLocal(_) | OpCode::SetLocal(_) | OpCode::Nil | OpCode::Call(_) |
+              OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide | OpCode::Negate |
+              OpCode::Not | OpCode::Equals | OpCode::Less | OpCode::Greater |
+              OpCode::UnpatchedJump | OpCode::Jump(_) | OpCode::JumpIfFalse(_) => ()
+          }
+       }
+        for f in self.functions.iter() {
+            f.name.mark();
+            f.chunk.mark();
+        }
+    }
 }
 
 impl DeepEq for Chunk {

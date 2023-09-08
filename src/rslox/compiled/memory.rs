@@ -17,6 +17,11 @@ impl<A> Managed<A> {
     pub fn ptr(&self) -> Pointer<A> { Pointer(Rc::downgrade(&self.0)) }
     pub fn as_ref(&self) -> Ref<A> { Ref::map(self.0.borrow(), |e| &e.0) }
     pub fn as_ref_mut(&mut self) -> RefMut<A> { RefMut::map(self.0.borrow_mut(), |e| &mut e.0) }
+    pub fn get_and_reset_mark(&self) -> bool {
+        let result = self.0.borrow().1;
+        self.0.borrow_mut().1 = false;
+        result
+    }
 }
 
 impl<A: PartialEq> PartialEq for Managed<A> {
@@ -55,9 +60,10 @@ impl<A> Pointer<A> {
     fn unwrap_upgrade(&self) -> RcRc<(A, IsUsed)> {
         self.0.upgrade().expect("Pointer was already collected")
     }
+    pub fn mark(&self) { self.unwrap_upgrade().borrow_mut().1 = true; }
 }
 
-impl <A: ToOwned<Owned = A>> Pointer<A> {
+impl<A: ToOwned<Owned=A>> Pointer<A> {
     // Half the places the use to_owned can probably just return &str.
     pub fn to_owned(&self) -> A { self.apply(|e| e.to_owned()) }
 }

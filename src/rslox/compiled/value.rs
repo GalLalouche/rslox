@@ -1,4 +1,5 @@
 use std::convert::{TryFrom, TryInto};
+use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::rc::Weak;
 
@@ -27,8 +28,20 @@ pub enum Value {
     String(InternedString),
     // We can use a Weak reference to the function, since it exists in the bytecode and will never
     // be collected.
-    Closure(Weak<Function>, Upvalues),
+    Closure(Closure),
     UpvaluePtr(Pointer<PointedUpvalue>),
+}
+
+#[derive(Clone)]
+pub struct Closure(Weak<Function>, Upvalues);
+
+impl Debug for Closure {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Closure")
+            .field("function_name", &self.0.upgrade().unwrap().name.to_owned())
+            .field("upvalues", &self.1)
+            .finish()
+    }
 }
 
 impl Pointer<PointedUpvalue> {
@@ -37,9 +50,13 @@ impl Pointer<PointedUpvalue> {
 }
 
 impl Value {
+    pub fn closure(function: Weak<Function>, upvalues: Upvalues) -> Self {
+        Value::Closure(Closure(function, upvalues))
+    }
+
     pub fn is_string(&self) -> bool {
         match &self {
-            Value::String(_) => true,
+            Value::String(..) => true,
             Value::UpvaluePtr(v) => v.deep_apply(|v| v.is_string()),
             _ => false,
         }
@@ -59,15 +76,16 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.to_owned(),
-            Value::Closure(f, _) => f.upgrade().unwrap().stringify(),
+            Value::Closure(Closure(f, _)) => f.upgrade().unwrap().stringify(),
             Value::UpvaluePtr(value) => value.deep_apply(|e| e.stringify()),
-            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
+            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
         }
     }
 
     pub fn pp_debug(&self) -> String {
         match self {
             Value::UpvaluePtr(v) => format!("upv: {}", v.deep_apply(|e| e.pp_debug())),
+            Value::TemporaryPlaceholder => "TemporaryPlaceholder".to_owned(),
             e => e.stringify(),
         }
     }
@@ -82,10 +100,17 @@ impl Value {
             _ => false,
         }
     }
-    pub fn is_upvalue_ptr(&self) -> bool {
+    pub fn is_upvalue_ptr(&self) -> bool { matches!(self, Value::UpvaluePtr(..)) }
+
+    pub fn mark(&self) {
         match self {
-            Value::UpvaluePtr(_) => true,
-            _ => false,
+            Value::Number(_) => (),
+            Value::Bool(_) => (),
+            Value::Nil => (),
+            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
+            Value::String(s) => s.mark(),
+            Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
+            Value::UpvaluePtr(p) => p.mark(),
         }
     }
 }
@@ -119,7 +144,7 @@ impl<'a> TryFrom<&'a Value> for (Weak<Function>, Upvalues) {
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
-            Value::Closure(f, uv) => Ok((f.clone(), uv.clone())),
+            Value::Closure(Closure(f, uv)) => Ok((f.clone(), uv.clone())),
             Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Closure, but found {:?}", e)),
         }
@@ -154,7 +179,6 @@ impl<'a> TryFrom<&'a Value> for InternedString {
 #[derive(Debug, Clone)]
 pub struct PointedUpvalue(PointedUpvalueImpl);
 
-pub type IsUsed = bool;
 /// Like [Value], [PointedUpvalueImpl] also performs shallow cloning. Since these are literally
 /// pointers ([PointedUpvalueImpl::Open] is a stack pointers, and [PointedUpvalueImpl::Closed]
 /// points to the heap), this makes sense. Notably, [PointedUpvalueImpl::Closed] is the only place
@@ -164,10 +188,19 @@ pub type IsUsed = bool;
 /// This enum is not very type safe, but since we want to change open upvalues to closed upvalues
 /// without anyone knowing about it, this is the way to do it. In effect, this is an ad-hoc linear
 /// type, moving from open to closed.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 enum PointedUpvalueImpl {
     Open(StackLocation, WeakRc<Vec<Value>>),
-    Closed(RcRc<Value>, IsUsed),
+    Closed(RcRc<Value>),
+}
+
+impl Clone for PointedUpvalueImpl {
+    fn clone(&self) -> Self {
+        match self {
+            PointedUpvalueImpl::Open(index, stack) => PointedUpvalueImpl::Open(*index, stack.clone()),
+            PointedUpvalueImpl::Closed(_) => panic!("Closed pointer cannot be cloned"),
+        }
+    }
 }
 
 impl PointedUpvalue {
@@ -180,7 +213,8 @@ impl PointedUpvalue {
             PointedUpvalueImpl::Open(i, ref mut v) => {
                 let value = std::mem::replace(
                     &mut v.upgrade().unwrap().borrow_mut()[*i], Value::TemporaryPlaceholder);
-                *self = PointedUpvalue(PointedUpvalueImpl::Closed(rcrc(value), false as IsUsed));
+                let managed = rcrc(value);
+                *self = PointedUpvalue(PointedUpvalueImpl::Closed(managed));
             }
             PointedUpvalueImpl::Closed(..) => panic!("Can't close a closed value!")
         }
@@ -190,7 +224,7 @@ impl PointedUpvalue {
         assert!(!value.is_upvalue_ptr());
         match &mut self.0 {
             PointedUpvalueImpl::Open(i, s) => s.upgrade().unwrap().borrow_mut()[*i] = value,
-            PointedUpvalueImpl::Closed(v,..) => v.borrow_mut().set(value),
+            PointedUpvalueImpl::Closed(v, ..) => *v.borrow_mut() = value,
         }
     }
 
@@ -211,9 +245,11 @@ impl PointedUpvalue {
     fn apply<B, F: FnOnce(&Value) -> B>(&self, f: F) -> B {
         match &self.0 {
             PointedUpvalueImpl::Open(i, s) => f(s.upgrade().unwrap().borrow().get(*i).unwrap()),
-            PointedUpvalueImpl::Closed(v, ..) => f(v.borrow().deref()),
+            PointedUpvalueImpl::Closed(v) => f(v.borrow().deref())
         }
     }
+
+    pub fn is_closed(&self) -> bool { matches!(self.0, PointedUpvalueImpl::Closed(..)) }
 }
 
 /// A compiled function, as opposed to a [Value::Closure] which is a specific runtime value,
@@ -272,5 +308,12 @@ impl Upvalues {
     // upvalue.
     pub fn set(&mut self, index: StackLocation, value: Value) {
         self.upvalues.borrow_mut()[index].deep_set(value)
+    }
+
+    pub fn mark(&self) {
+        // We only need to mark closed upvalues, since open upvalues will never be collected.
+        self.upvalues.borrow_mut().iter_mut().for_each(|p| if p.apply(|upv| upv.is_closed()) {
+            p.mark()
+        })
     }
 }

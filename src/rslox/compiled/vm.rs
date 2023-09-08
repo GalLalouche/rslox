@@ -67,6 +67,9 @@ impl VirtualMachine {
         );
         let mut vm = VirtualMachine { frames: NonEmpty::new(top_frame) };
         while vm.unfinished() {
+            // I'm calling it at pretty arbitrary times, since I just want to make sure it works,
+            // and I'm too lazy to implement a proper mechanism for checking the current code use.
+            vm.collect_garbage();
             match vm.go(writer) {
                 Err(ref mut err) => {
                     for f in vm.frames.iter().rev().skip(1) {
@@ -81,6 +84,7 @@ impl VirtualMachine {
     }
 
     fn go(&mut self, writer: &mut impl Write) -> Result<(), VmError> {
+        self.collect_garbage();
         if self.frames.len() > MAX_FRAMES {
             let active_frame = self.frames.last();
             let line = active_frame.current_line();
@@ -89,21 +93,46 @@ impl VirtualMachine {
                 active_frame.function.upgrade().unwrap().name.to_owned(),
                 line,
             ));
-        }
-        self.frames.last_mut().run(writer).map(|maybe_cf| match maybe_cf {
+        };
+        let result = self.frames.last_mut().run(writer).map(|maybe_cf| match maybe_cf {
             None => {
                 if let Some(stack_index) = self.frames.pop().map(|f| f.stack_index) {
                     self.frames.last_mut().stack.borrow_mut().truncate(stack_index);
                 }
             }
             Some(cf) => self.frames.push(cf),
-        })
+        })?;
+        self.collect_garbage();
+        Ok(result)
     }
 
     fn unfinished(&self) -> bool { self.frames.last().unfinished() }
 
     fn _debug_stack(&self) -> () {
         self.frames.first()._debug_stack();
+    }
+
+    fn collect_garbage(&mut self) {
+        self.mark();
+        self.sweep();
+    }
+
+    fn mark(&mut self) {
+        let top_frame = &self.frames.head;
+        for local in top_frame.stack.borrow().iter() {
+            local.mark();
+        }
+        top_frame.function.upgrade().unwrap().chunk.mark();
+        for (name, value) in top_frame.globals.borrow().iter() {
+            name.mark();
+            value.mark();
+        }
+    }
+
+    fn sweep(&mut self) {
+        let top_frame = &mut self.frames.head;
+        top_frame.interned_strings.borrow_mut().sweep();
+        top_frame.closed_upvalues.borrow_mut().retain(|e| e.get_and_reset_mark());
     }
 }
 
@@ -122,7 +151,7 @@ struct CallFrame {
     stack_index: usize,
 }
 
-static MAX_FRAMES: usize = 10000;
+static MAX_FRAMES: usize = 100;
 
 impl CallFrame {
     pub fn new(
@@ -213,12 +242,15 @@ impl CallFrame {
                         });
                 }
                 stack.borrow_mut().push(
-                    Value::Closure(
+                    Value::closure(
                         self.function.upgrade().unwrap().chunk.get_function(*i),
                         Upvalues::new(upvalue_ptrs),
                     ));
             }
-            OpCode::CloseUpvalue => self.close_upvalues(self.stack_index),
+            OpCode::CloseUpvalue => {
+                self.close_upvalues(self.stack_index);
+                self.stack.borrow_mut().pop().unwrap();
+            }
             OpCode::UnpatchedJump => panic!("Jump should have been patched at line: '{}'", line),
             OpCode::JumpIfFalse(index) => {
                 assert!(*index > self.ip, "Jump target '{}' was smaller than ip '{}'", index, self.ip);
@@ -387,7 +419,6 @@ impl CallFrame {
             self.closed_upvalues.borrow_mut().push(next);
         }
     }
-
     fn _debug_stack(&self) -> () {
         let stack = &self.stack;
         eprintln!("stack for {}:", &self.function.upgrade().unwrap().name.to_owned());
@@ -396,6 +427,7 @@ impl CallFrame {
         }
     }
 }
+
 
 // Copies all interned data locally.
 #[cfg(test)]
