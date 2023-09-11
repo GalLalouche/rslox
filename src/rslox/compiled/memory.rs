@@ -49,6 +49,7 @@ impl<A: Hash> Hash for Managed<A> {
 pub struct Pointer<A>(Weak<RefCell<(A, bool)>>);
 
 impl<A> Pointer<A> {
+    pub fn null() -> Self { Pointer(Weak::new())}
     pub fn apply<B, F: FnOnce(&A) -> B>(&self, func: F) -> B {
         func(&self.unwrap_upgrade().borrow().0)
     }
@@ -122,3 +123,22 @@ impl<A> Eq for Pointer<A> {}
 impl<A> Hash for Pointer<A> {
     fn hash<H: Hasher>(&self, state: &mut H) { self.0.as_ptr().hash(state) }
 }
+
+#[derive(Debug)]
+pub struct Heap<A> (Vec<Managed<A>>);
+
+impl <A> Heap<A> {
+    pub fn push(&mut self, a: A) -> Pointer<A> { self.own(Managed::new(a)) }
+
+    pub fn own(&mut self, managed: Managed<A>) -> Pointer<A> {
+        let ptr = managed.ptr();
+        self.0.push(managed);
+        ptr
+    }
+
+    pub fn sweep(&mut self) {
+        self.0.retain(|m| m.get_and_reset_mark())
+    }
+}
+
+impl <A> Default for Heap<A> { fn default() -> Self { Heap(Vec::new()) } }
