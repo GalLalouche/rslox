@@ -239,17 +239,16 @@ impl CallFrame {
             }
             OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
             OpCode::Function(i, upvalues) => {
-                let mut upvalue_ptrs: Vec<Pointer<PointedUpvalue>> = Vec::with_capacity(upvalues.len());
-                for Upvalue { index, is_local } in upvalues {
-                    upvalue_ptrs.push(
+                let upvalue_ptrs: Vec<Pointer<PointedUpvalue>> =
+                    upvalues.into_iter().map(|Upvalue { index, is_local }|
                         if *is_local {
                             self.capture_upvalue(self.stack_index + *index)
                         } else {
                             let enclosing_func = &self.stack.borrow_mut()[self.stack_index - 1];
                             let (_, enclosing_upvalues) = enclosing_func.try_into().unwrap();
                             enclosing_upvalues.apply(|e| e.get(*index))
-                        });
-                }
+                        }
+                    ).collect();
                 let ptr = self.upvalues_heap.borrow_mut().push(Upvalues::new(upvalue_ptrs));
                 stack.borrow_mut().push(
                     Value::closure(self.function.upgrade().unwrap().chunk.get_function(*i), ptr));
