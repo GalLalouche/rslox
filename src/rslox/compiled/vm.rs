@@ -1496,4 +1496,44 @@ print pair.first + pair.second; // 3.
             "3",
         )
     }
+
+    #[test]
+    fn nested_getting_and_setting() {
+        assert_printed(
+            r#"
+class Foo {}
+
+var foo = Foo();
+foo.foo = Foo();
+foo.foo.x = 42;
+var bar = foo.foo;
+bar.y = 43;
+print foo.foo.x;
+print foo.foo.y;
+           "#,
+            "4243",
+        )
+    }
+
+    #[test]
+    fn setting_closures() {
+        assert_printed(
+            r#"
+class Foo {}
+
+var foo = Foo();
+{
+    fun bar(x) {
+        fun bazz() {
+            return x + 1;
+        }
+        foo.bazz = bazz;
+    }
+    bar(42);
+}
+print foo.bazz();
+           "#,
+            "43",
+        )
+    }
 }
