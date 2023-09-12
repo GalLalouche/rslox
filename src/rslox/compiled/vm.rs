@@ -14,7 +14,7 @@ use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::memory::{Heap, InternedString, Managed, Pointer};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
+use crate::rslox::compiled::value::{Class, Function, PointedUpvalue, Upvalues, Value};
 
 use super::compiler::InternedStrings;
 
@@ -248,7 +248,7 @@ impl CallFrame {
             }
             OpCode::Class(i) => {
                 self.stack.borrow_mut().push(
-                    Value::instance(self.function.upgrade().unwrap().chunk.get_class(*i)),
+                    Value::Class(self.function.upgrade().unwrap().chunk.get_class(*i)),
                 )
             }
             OpCode::CloseUpvalue => {
@@ -323,25 +323,33 @@ impl CallFrame {
             OpCode::Call(arg_count) => {
                 let func_index = stack.borrow().len() - arg_count - 1;
                 let value = stack.borrow().get(func_index).cloned().unwrap();
-                let (function, upvalues) = self.try_into_err(&value, "call", *line)?;
-                let arity = &function.upgrade().unwrap().arity;
-                if arity != arg_count {
+                if let Ok((function, upvalues)) = (&value).try_into() {
+                    let arity = &function.upgrade().unwrap().arity;
+                    if arity != arg_count {
+                        return Err(self.err(
+                            format!("Expected {} arguments but got {}", arity, arg_count),
+                            *line));
+                    }
+                    self.ip += 1;
+                    return Ok(Some(CallFrame::new(
+                        0 as InstructionPointer,
+                        function,
+                        stack.borrow().len() - *arity as StackLocation,
+                        upvalues,
+                        stack.clone(),
+                        globals.clone(),
+                        self.interned_strings.clone(),
+                        self.open_upvalues.clone(),
+                        self.closed_upvalues.clone(),
+                    )));
+                } else if let Ok(class) = TryInto::<Weak<Class>>::try_into(&value) {
+                    assert_eq!(*arg_count, 0);
+                    assert_eq!(func_index, stack.borrow().len() - 1);
+                    *stack.borrow_mut().last_mut().unwrap() = Value::instance(class);
+                } else {
                     return Err(self.err(
-                        format!("Expected {} arguments but got {}", arity, arg_count),
-                        *line));
+                        format!("Expected closure or class, got {}", value.stringify()), *line))
                 }
-                self.ip += 1;
-                return Ok(Some(CallFrame::new(
-                    0 as InstructionPointer,
-                    function,
-                    stack.borrow().len() - *arity as StackLocation,
-                    upvalues,
-                    stack.clone(),
-                    globals.clone(),
-                    self.interned_strings.clone(),
-                    self.open_upvalues.clone(),
-                    self.closed_upvalues.clone(),
-                )));
             }
             OpCode::Add =>
                 if stack.borrow().last().unwrap().is_string() {
@@ -460,7 +468,8 @@ mod tests {
                 Value::Bool(b) => TracedValue::Bool(*b),
                 Value::Nil => TracedValue::Nil,
                 Value::String(s) => TracedValue::String(s.to_owned()),
-                Value::Instance(..) => panic!("Instances don't have a traced value"),
+                Value::Instance(..) => panic!("instances don't have a traced value"),
+                Value::Class(..) => panic!("Classes don't have a traced value"),
                 Value::Closure(..) => panic!("Closures don't have a traced value"),
                 Value::UpvaluePtr(..) => panic!("Upvalues don't have a traced value"),
                 Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
@@ -1430,6 +1439,17 @@ class Foo {}
 print Foo;
            "#,
             "Foo",
+        )
+    }
+
+    #[test]
+    fn basic_class_instantiation() {
+        assert_printed(
+            r#"
+class Foo {}
+print Foo();
+           "#,
+            "Foo instance",
         )
     }
 }

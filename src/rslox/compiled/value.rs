@@ -28,6 +28,7 @@ pub enum Value {
     TemporaryPlaceholder,
     String(InternedString),
     Closure(Closure),
+    Class(Weak<Class>),
     Instance(Instance),
     UpvaluePtr(Pointer<PointedUpvalue>),
 }
@@ -48,6 +49,15 @@ impl Debug for Closure {
 // Same as above, we can get by with a Weak reference to the class.
 #[derive(Clone)]
 pub struct Instance(Weak<Class>, RcRc<HashMap<InternedString, Value>>);
+
+impl Instance {
+   pub fn mark(&self) {
+       for (k, v) in self.1.borrow().deref().into_iter() {
+           k.mark();
+           v.mark();
+       }
+   }
+}
 
 impl Debug for Instance {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -93,8 +103,10 @@ impl Value {
             Value::Bool(b) => b.to_string(),
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.to_owned(),
+            Value::Class(c) => c.upgrade().unwrap().stringify(),
             Value::Closure(Closure(f, _)) => f.upgrade().unwrap().stringify(),
-            Value::Instance(Instance(c, _)) => c.upgrade().unwrap().stringify(),
+            Value::Instance(instance) =>
+                format_interned!("{} instance", instance.0.upgrade().unwrap().name),
             Value::UpvaluePtr(value) => value.deep_apply(|e| e.stringify()),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
         }
@@ -127,12 +139,9 @@ impl Value {
             Value::Nil => (),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
             Value::String(s) => s.mark(),
+            Value::Class(c) => c.upgrade().unwrap().name.mark(),
+            Value::Instance(i) => i.mark(),
             Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
-            Value::Instance(Instance(_, fields)) =>
-                for (k, v) in fields.borrow().deref().into_iter() {
-                    k.mark();
-                    v.mark();
-                }
             Value::UpvaluePtr(p) => p.mark(),
         }
     }
@@ -170,6 +179,18 @@ impl<'a> TryFrom<&'a Value> for (Weak<Function>, Upvalues) {
             Value::Closure(Closure(f, uv)) => Ok((f.clone(), uv.clone())),
             Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Closure, but found {:?}", e)),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Value> for Weak<Class> {
+    type Error = String;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match &value {
+            Value::Class(class) => Ok(class.clone()),
+            Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
+            e => Err(format!("Expected Value::Class, but found {:?}", e)),
         }
     }
 }
@@ -296,7 +317,7 @@ impl DeepEq for Function {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Class {
     pub name: InternedString,
 }
