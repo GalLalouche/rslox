@@ -46,6 +46,12 @@ impl VirtualMachine {
     pub fn run(
         chunk: Chunk, interned_strings: InternedStrings, writer: &mut impl Write,
     ) -> Result<Vec<Value>, VmError> {
+        VirtualMachine::run_apply(chunk, interned_strings, writer, |vm| vm.frames.head.stack.take())
+    }
+
+    pub fn run_apply<A, F: FnOnce(VirtualMachine) -> A>(
+        chunk: Chunk, interned_strings: InternedStrings, writer: &mut impl Write, f: F,
+    ) -> Result<A, VmError> {
         let name = Managed::new("<script>".to_owned());
         let script = Rc::new(Function { name: name.ptr(), arity: 0, chunk });
         let stack: RcRc<Vec<Value>> = Default::default();
@@ -82,7 +88,7 @@ impl VirtualMachine {
                 _ => (),
             }
         }
-        Ok(stack.take())
+        Ok(f(vm))
     }
 
     fn go(&mut self, writer: &mut impl Write) -> Result<(), VmError> {
@@ -466,6 +472,7 @@ impl CallFrame {
 // Copies all interned data locally.
 #[cfg(test)]
 mod tests {
+    use std::convert::identity;
     use std::io::{Cursor, sink};
 
     use crate::assert_eq_vec;
@@ -524,17 +531,19 @@ mod tests {
         stack.unwrap_single().into()
     }
 
-    fn printed_string(lines: Vec<&str>) -> String {
+    fn run(code: &str) -> (VirtualMachine, String) {
         let mut buff = Cursor::new(Vec::new());
-        let (chunk, interned_strings) = unsafe_compile(lines);
+        let (chunk, interned_strings) = unsafe_compile(vec![code]);
         // // Comment this in for debugging the compiled program.
         // eprintln!("disassembled:\n{}", crate::rslox::compiled::compiler::disassemble(&chunk).join("\n"));
-        VirtualMachine::run(chunk, interned_strings, &mut buff).unwrap();
-        buff.get_ref().into_iter().map(|i| *i as char).collect()
+        let vm = VirtualMachine::run_apply(chunk, interned_strings, &mut buff, identity).unwrap();
+        (vm, buff.get_ref().into_iter().map(|i| *i as char).collect())
     }
 
+    fn printed_string(code: &str) -> String { run(code).1 }
+
     fn assert_printed(code: &str, expected: &str) {
-        assert_eq!(printed_string(vec![code]), expected)
+        assert_eq!(printed_string(code), expected)
     }
 
     fn single_error(code: &str) -> VmError {
@@ -1561,5 +1570,22 @@ print foo.bazz();
            "#,
             "43",
         )
+    }
+
+    #[test]
+    fn cyclic_references() {
+        let vm = run(
+            r#"
+class Foo {}
+
+{
+    var foo = Foo();
+    var bar = Foo();
+    foo.x = bar;
+    bar.x = foo;
+}
+           "#,
+        ).0;
+        assert!(vm.frames.head.objects.take().is_empty())
     }
 }

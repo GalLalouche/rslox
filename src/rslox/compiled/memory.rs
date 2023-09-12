@@ -7,19 +7,21 @@ use std::rc::{Rc, Weak};
 use crate::rslox::common::utils::{RcRc, rcrc};
 use crate::rslox::compiled::tests::DeepEq;
 
-pub type IsUsed = bool;
+type IsUsed = bool;
+type Visited = bool;
 
 #[derive(Debug)]
-pub struct Managed<A>(RcRc<(A, IsUsed)>);
+pub struct Managed<A>(RcRc<(A, IsUsed, Visited)>);
 
 impl<A> Managed<A> {
-    pub fn new(value: A) -> Self { Managed(rcrc((value, false as IsUsed))) }
+    pub fn new(value: A) -> Self { Managed(rcrc((value, false as IsUsed, false as Visited))) }
     pub fn ptr(&self) -> Pointer<A> { Pointer(Rc::downgrade(&self.0)) }
     pub fn as_ref(&self) -> Ref<A> { Ref::map(self.0.borrow(), |e| &e.0) }
     pub fn as_ref_mut(&mut self) -> RefMut<A> { RefMut::map(self.0.borrow_mut(), |e| &mut e.0) }
     pub fn get_and_reset_mark(&self) -> bool {
         let result = self.0.borrow().1;
         self.0.borrow_mut().1 = false;
+        self.0.borrow_mut().2 = false;
         result
     }
 }
@@ -46,7 +48,7 @@ impl<A: Hash> Hash for Managed<A> {
 // panic-ing for catching programmer errors. Basically here for PartialEq implementation. I'm sure
 // there's a good reason why it's not implemented for plain old Weak :\
 #[derive(Clone)]
-pub struct Pointer<A>(Weak<RefCell<(A, bool)>>);
+pub struct Pointer<A>(Weak<RefCell<(A, IsUsed, Visited)>>);
 
 impl<A> Pointer<A> {
     pub fn null() -> Self { Pointer(Weak::new()) }
@@ -58,10 +60,17 @@ impl<A> Pointer<A> {
         assert!(!rc.borrow().1, "mutation should not occur while marking");
         func(RefMut::map(rc.borrow_mut(), |e| &mut e.0).deref_mut());
     }
-    fn unwrap_upgrade(&self) -> RcRc<(A, IsUsed)> {
+    fn unwrap_upgrade(&self) -> RcRc<(A, IsUsed, Visited)> {
         self.0.upgrade().expect("Pointer was already collected")
     }
-    pub fn mark(&self) { self.unwrap_upgrade().borrow_mut().1 = true; }
+    pub fn mark(&self) -> Visited {
+        if self.unwrap_upgrade().borrow().2 {
+            return false;
+        }
+        self.unwrap_upgrade().borrow_mut().2 = true;
+        self.unwrap_upgrade().borrow_mut().1 = true;
+        true
+    }
 }
 
 impl<A: ToOwned<Owned=A>> Pointer<A> {
@@ -93,7 +102,7 @@ pub type InternedString = Pointer<String>;
 
 impl InternedString {
     #[doc(hidden)]
-    pub fn rc_for_macro__(&self) -> RcRc<(String, IsUsed)> { self.unwrap_upgrade() }
+    pub fn rc_for_macro__(&self) -> RcRc<(String, IsUsed, Visited)> { self.unwrap_upgrade() }
 }
 
 impl<A: PartialEq> Pointer<A> {
@@ -139,6 +148,8 @@ impl<A> Heap<A> {
     pub fn sweep(&mut self) {
         self.0.retain(|m| m.get_and_reset_mark())
     }
+
+    pub fn is_empty(&self) -> bool { self.0.is_empty() }
 }
 
 impl<A> Default for Heap<A> { fn default() -> Self { Heap(Vec::new()) } }

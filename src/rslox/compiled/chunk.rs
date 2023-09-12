@@ -75,12 +75,12 @@ impl Chunk {
     pub fn mark(&self) {
         for c in self.code.iter() {
             match &c.0 {
-                OpCode::String(s) => s.mark(),
-                OpCode::DefineGlobal(g) => g.mark(),
-                OpCode::GetGlobal(g) => g.mark(),
-                OpCode::SetGlobal(g) => g.mark(),
-                OpCode::GetProperty(n) => n.mark(),
-                OpCode::SetProperty(n) => n.mark(),
+                OpCode::String(s) => { s.mark(); }
+                OpCode::DefineGlobal(g) => { g.mark(); }
+                OpCode::GetGlobal(g) => { g.mark(); }
+                OpCode::SetGlobal(g) => { g.mark(); }
+                OpCode::GetProperty(n) => { n.mark(); }
+                OpCode::SetProperty(n) => { n.mark(); }
                 OpCode::Return | OpCode::Pop | OpCode::PopN(_) | OpCode::Print |
                 OpCode::Function(_, _) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
                 OpCode::Number(_) | OpCode::Bool(_) | OpCode::GetUpvalue(_) | OpCode::SetUpvalue(_) |
@@ -88,7 +88,7 @@ impl Chunk {
                 OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide | OpCode::Negate |
                 OpCode::Not | OpCode::Equals | OpCode::Less | OpCode::Greater |
                 OpCode::UnpatchedJump | OpCode::Jump(_) | OpCode::JumpIfFalse(_) |
-                OpCode::Class(..)=> ()
+                OpCode::Class(..) => ()
             }
         }
         for f in self.functions.iter() {

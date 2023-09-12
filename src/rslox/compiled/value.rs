@@ -29,6 +29,7 @@ pub enum Value {
     String(InternedString),
     Closure(Closure),
     Class(Weak<Class>),
+    // Unlike closures, instances can have cyclic references.
     Instance(Pointer<Instance>),
     UpvaluePtr(Pointer<PointedUpvalue>),
 }
@@ -146,14 +147,15 @@ impl Value {
             Value::Bool(_) => (),
             Value::Nil => (),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
-            Value::String(s) => s.mark(),
-            Value::Class(c) => c.upgrade().unwrap().name.mark(),
+            Value::String(s) => { s.mark(); }
+            Value::Class(c) => { c.upgrade().unwrap().name.mark(); }
             Value::Instance(i_ptr) => {
-                i_ptr.mark();
-                i_ptr.apply(|i| i.mark());
+                if i_ptr.mark() {
+                    i_ptr.apply(|i| i.mark());
+                }
             }
             Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
-            Value::UpvaluePtr(p) => p.mark(),
+            Value::UpvaluePtr(p) => { p.mark(); }
         }
     }
 }
@@ -396,7 +398,7 @@ impl Upvalues {
     pub fn mark(&self) {
         // We only need to mark closed upvalues, since open upvalues will never be collected.
         self.upvalues.borrow_mut().iter_mut().for_each(|p| if p.apply(|upv| upv.is_closed()) {
-            p.mark()
+            p.mark();
         })
     }
 }
