@@ -246,6 +246,11 @@ impl CallFrame {
                         Upvalues::new(upvalue_ptrs),
                     ));
             }
+            OpCode::Class(i) => {
+                self.stack.borrow_mut().push(
+                    Value::instance(self.function.upgrade().unwrap().chunk.get_class(*i)),
+                )
+            }
             OpCode::CloseUpvalue => {
                 self.close_upvalues(self.stack_index);
                 self.stack.borrow_mut().pop().unwrap();
@@ -455,6 +460,7 @@ mod tests {
                 Value::Bool(b) => TracedValue::Bool(*b),
                 Value::Nil => TracedValue::Nil,
                 Value::String(s) => TracedValue::String(s.to_owned()),
+                Value::Instance(..) => panic!("Instances don't have a traced value"),
                 Value::Closure(..) => panic!("Closures don't have a traced value"),
                 Value::UpvaluePtr(..) => panic!("Upvalues don't have a traced value"),
                 Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!")
@@ -1413,6 +1419,17 @@ f();
 g();
            "#,
             "4344",
+        )
+    }
+
+    #[test]
+    fn basic_class_declaration() {
+        assert_printed(
+            r#"
+class Foo {}
+print Foo;
+           "#,
+            "Foo",
         )
     }
 }

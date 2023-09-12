@@ -12,7 +12,6 @@ use {
 
 #[cfg(test)]
 pub fn unsafe_compile(program: Vec<&str>) -> (Chunk, InternedStrings) {
-
     compile(unsafe_tokenize(program)).expect("Failed to compile")
 }
 

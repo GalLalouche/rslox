@@ -6,7 +6,7 @@ use std::rc::{Rc, Weak};
 use crate::rslox::compiled::code::Code;
 use crate::rslox::compiled::op_code::{CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::tests::DeepEq;
-use crate::rslox::compiled::value::Function;
+use crate::rslox::compiled::value::{Class, Function};
 
 // Overriding for Borrow
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
@@ -32,6 +32,7 @@ pub type Line = usize;
 pub struct Chunk {
     code: Code,
     functions: Vec<Rc<Function>>,
+    classes: Vec<Rc<Class>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Copy, Hash)]
@@ -54,6 +55,12 @@ impl Chunk {
         self.functions.push(Rc::new(function));
         result
     }
+    pub fn add_class(&mut self, class: Class, line: Line) -> CodeLocation {
+        let index = self.functions.len();
+        let result = self.write(OpCode::Class(index), line);
+        self.classes.push(Rc::new(class));
+        result
+    }
     pub fn get_mut(&mut self, i: usize) -> Option<&mut (OpCode, Line)> { self.code.get_mut(i) }
     pub fn remove(&mut self, i: usize) -> (OpCode, Line) { self.code.remove(i) }
     pub fn pop(&mut self) -> (OpCode, Line) { self.code.pop() }
@@ -61,25 +68,27 @@ impl Chunk {
     pub fn get_code(&self) -> &Code { &self.code }
     pub fn function_count(&self) -> usize { self.functions.len() }
     pub fn get_function(&self, i: usize) -> Weak<Function> { Rc::downgrade(&self.functions[i]) }
+    pub fn get_class(&self, i: usize) -> Weak<Class> { Rc::downgrade(&self.classes[i]) }
 
     pub fn to_tuple(self) -> (Code, Vec<Rc<Function>>) { (self.code, self.functions) }
 
     pub fn mark(&self) {
-       for c in self.code.iter() {
-          match &c.0 {
-              OpCode::String(s) => s.mark(),
-              OpCode::DefineGlobal(g) => g.mark(),
-              OpCode::GetGlobal(g) => g.mark(),
-              OpCode::SetGlobal(g) => g.mark(),
-              OpCode::Return | OpCode::Pop | OpCode::PopN(_) | OpCode::Print |
-              OpCode::Function(_, _) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
-              OpCode::Number(_) | OpCode::Bool(_) | OpCode::GetUpvalue(_) | OpCode::SetUpvalue(_) |
-              OpCode::GetLocal(_) | OpCode::SetLocal(_) | OpCode::Nil | OpCode::Call(_) |
-              OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide | OpCode::Negate |
-              OpCode::Not | OpCode::Equals | OpCode::Less | OpCode::Greater |
-              OpCode::UnpatchedJump | OpCode::Jump(_) | OpCode::JumpIfFalse(_) => ()
-          }
-       }
+        for c in self.code.iter() {
+            match &c.0 {
+                OpCode::String(s) => s.mark(),
+                OpCode::DefineGlobal(g) => g.mark(),
+                OpCode::GetGlobal(g) => g.mark(),
+                OpCode::SetGlobal(g) => g.mark(),
+                OpCode::Return | OpCode::Pop | OpCode::PopN(_) | OpCode::Print |
+                OpCode::Function(_, _) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
+                OpCode::Number(_) | OpCode::Bool(_) | OpCode::GetUpvalue(_) | OpCode::SetUpvalue(_) |
+                OpCode::GetLocal(_) | OpCode::SetLocal(_) | OpCode::Nil | OpCode::Call(_) |
+                OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide | OpCode::Negate |
+                OpCode::Not | OpCode::Equals | OpCode::Less | OpCode::Greater |
+                OpCode::UnpatchedJump | OpCode::Jump(_) | OpCode::JumpIfFalse(_) |
+                OpCode::Class(..)=> ()
+            }
+        }
         for f in self.functions.iter() {
             f.name.mark();
             f.chunk.mark();

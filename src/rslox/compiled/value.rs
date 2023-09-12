@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::convert::{TryFrom, TryInto};
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
@@ -26,20 +27,32 @@ pub enum Value {
     Nil,
     TemporaryPlaceholder,
     String(InternedString),
-    // We can use a Weak reference to the function, since it exists in the bytecode and will never
-    // be collected.
     Closure(Closure),
+    Instance(Instance),
     UpvaluePtr(Pointer<PointedUpvalue>),
 }
 
 #[derive(Clone)]
+// We can use a Weak reference to the function, since it exists in the bytecode and will never
+// be collected.
 pub struct Closure(Weak<Function>, Upvalues);
 
 impl Debug for Closure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Closure")
+        f.debug_struct("Class")
             .field("function_name", &self.0.upgrade().unwrap().name.to_owned())
-            .field("upvalues", &self.1)
+            .finish()
+    }
+}
+
+// Same as above, we can get by with a Weak reference to the class.
+#[derive(Clone)]
+pub struct Instance(Weak<Class>, RcRc<HashMap<InternedString, Value>>);
+
+impl Debug for Instance {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Closure")
+            .field("class_name", &self.0.upgrade().unwrap().name.to_owned())
             .finish()
     }
 }
@@ -52,6 +65,10 @@ impl Pointer<PointedUpvalue> {
 impl Value {
     pub fn closure(function: Weak<Function>, upvalues: Upvalues) -> Self {
         Value::Closure(Closure(function, upvalues))
+    }
+
+    pub fn instance(class: Weak<Class>) -> Self {
+        Value::Instance(Instance(class, rcrc(HashMap::new())))
     }
 
     pub fn is_string(&self) -> bool {
@@ -77,6 +94,7 @@ impl Value {
             Value::Nil => "nil".to_owned(),
             Value::String(s) => s.to_owned(),
             Value::Closure(Closure(f, _)) => f.upgrade().unwrap().stringify(),
+            Value::Instance(Instance(c, _)) => c.upgrade().unwrap().stringify(),
             Value::UpvaluePtr(value) => value.deep_apply(|e| e.stringify()),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
         }
@@ -110,6 +128,11 @@ impl Value {
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
             Value::String(s) => s.mark(),
             Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
+            Value::Instance(Instance(_, fields)) =>
+                for (k, v) in fields.borrow().deref().into_iter() {
+                    k.mark();
+                    v.mark();
+                }
             Value::UpvaluePtr(p) => p.mark(),
         }
     }
@@ -272,6 +295,22 @@ impl DeepEq for Function {
             && self.chunk.deep_eq(&other.chunk)
     }
 }
+
+#[derive(Debug, PartialEq)]
+pub struct Class {
+    pub name: InternedString,
+}
+
+impl Class {
+    pub fn stringify(&self) -> String { format_interned!("{}", self.name) }
+}
+
+impl DeepEq for Class {
+    fn deep_eq(&self, other: &Self) -> bool {
+        self.name.to_owned() == other.name.to_owned()
+    }
+}
+
 
 /// Since closures, i.e., function values, follow reference semantics (i.e., one can assign the same
 /// closure to multiple values), this clone is also shallow. Of course, closures also share data,

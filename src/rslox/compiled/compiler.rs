@@ -12,7 +12,7 @@ use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::memory::{InternedString, Managed};
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
-use crate::rslox::compiled::value::Function;
+use crate::rslox::compiled::value::{Class, Function};
 
 type CompilerError = ParserError;
 
@@ -124,7 +124,18 @@ impl Compiler {
     }
 
     fn declaration(&mut self, errors: &mut Vec<CompilerError>) -> Option<Line> {
-        if let Some(_) = self.matches(TokenType::Fun) {
+        if let Some(_) = self.matches(TokenType::Class) {
+            match self.declare_class() {
+                Ok(l) => Some(l),
+                Err(errs) => {
+                    for err in errs {
+                        errors.push(err);
+                    }
+                    self.synchronize();
+                    None
+                }
+            }
+        } else if let Some(_) = self.matches(TokenType::Fun) {
             match self.declare_function() {
                 Ok(l) => Some(l),
                 Err(errs) => {
@@ -291,6 +302,17 @@ impl Compiler {
         self.statement()?;
         self.active_frame_mut().patch_jump(jump_pos, offset, ctor);
         Ok(jump_pos)
+    }
+
+    fn declare_class(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
+        let (name, line) = self.parse_variable()?;
+        self.mark_initialized();
+        self.consume(TokenType::OpenBrace, None)?;
+        self.consume(TokenType::CloseBrace, None)?;
+        let class = Class { name: name.clone() };
+        self.active_chunk_mut().add_class(class, line);
+        self.define_variable(name, line)?;
+        Ok(line)
     }
 
     fn declare_function(&mut self) -> Result<Line, NonEmpty<CompilerError>> {
@@ -765,6 +787,7 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
                     .collect::<Vec<_>>()
                     .join(","),
             ),
+            OpCode::Class(i) => format!("{}", i),
             OpCode::DefineGlobal(name) => format_interned!("'{}'", name),
             OpCode::GetGlobal(name) => format_interned!("'{}'", name),
             OpCode::SetGlobal(name) => format_interned!("'{}'", name),
