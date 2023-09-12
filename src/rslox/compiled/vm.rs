@@ -14,7 +14,7 @@ use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::memory::{Heap, InternedString, Managed, Pointer};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
+use crate::rslox::compiled::value::{Function, Instance, PointedUpvalue, Upvalues, Value};
 
 use super::compiler::InternedStrings;
 
@@ -54,6 +54,7 @@ impl VirtualMachine {
         let open_upvalues = rcrc(LinkedList::new());
         let closed_upvalues = rcrc(Heap::default());
         let rc_interned_strings = rcrc(interned_strings);
+        let objects = rcrc(Heap::default());
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
             Rc::downgrade(&script),
@@ -64,6 +65,7 @@ impl VirtualMachine {
             rc_interned_strings,
             open_upvalues,
             closed_upvalues,
+            objects,
         );
         let mut vm = VirtualMachine { frames: NonEmpty::new(top_frame) };
         while vm.unfinished() {
@@ -133,6 +135,7 @@ impl VirtualMachine {
         let top_frame = &mut self.frames.head;
         top_frame.interned_strings.borrow_mut().sweep();
         top_frame.closed_upvalues.borrow_mut().sweep();
+        top_frame.objects.borrow_mut().sweep();
     }
 }
 
@@ -148,6 +151,7 @@ struct CallFrame {
     globals: RcRc<HashMap<InternedString, Value>>,
     open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
     closed_upvalues: RcRc<Heap<PointedUpvalue>>,
+    objects: RcRc<Heap<Instance>>,
     stack_index: usize,
 }
 
@@ -164,6 +168,7 @@ impl CallFrame {
         interned_strings: RcRc<InternedStrings>,
         open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
         closed_upvalues: RcRc<Heap<PointedUpvalue>>,
+        objects: RcRc<Heap<Instance>>,
     ) -> Self {
         CallFrame {
             ip,
@@ -175,6 +180,7 @@ impl CallFrame {
             stack_index,
             open_upvalues,
             closed_upvalues,
+            objects,
         }
     }
     pub fn current_line(&self) -> Line {
@@ -252,19 +258,17 @@ impl CallFrame {
                 )
             }
             OpCode::GetProperty(n) => {
-                let (_, fields): (_, RcRc<HashMap<InternedString, Value>>) = self.try_into_err(
-                    &self.stack.borrow_mut().pop().unwrap(), "set_property", *line)?;
-                let got_fields = fields.borrow_mut();
-                let value =
-                    got_fields.get(n).ok_or(
-                        self.err(format_interned!("Undefined property '{}'.", n), *line))?;
+                let instance: Pointer<Instance> = self.try_into_err(
+                    &self.stack.borrow_mut().pop().unwrap(), "get_property", *line)?;
+                let value = instance.apply(|i| i.get(n.clone())).ok_or(
+                    self.err(format_interned!("Undefined property '{}'.", n), *line))?;
                 stack.borrow_mut().push(value.clone());
             }
             OpCode::SetProperty(n) => {
                 let value = self.stack.borrow_mut().pop().unwrap();
-                let (_, fields): (_, RcRc<HashMap<InternedString, Value>>) = self.try_into_err(
+                let mut instance: Pointer<Instance> = self.try_into_err(
                     &self.stack.borrow_mut().pop().unwrap(), "set_property", *line)?;
-                fields.borrow_mut().insert(n.clone(), value.clone());
+                instance.mutate(|i| i.set(n.clone(), value.clone()));
                 stack.borrow_mut().push(value);
             }
             OpCode::CloseUpvalue => {
@@ -357,11 +361,13 @@ impl CallFrame {
                         self.interned_strings.clone(),
                         self.open_upvalues.clone(),
                         self.closed_upvalues.clone(),
+                        self.objects.clone(),
                     )));
                 } else if let Ok(class) = value.try_into_class() {
                     assert_eq!(*arg_count, 0);
                     assert_eq!(func_index, stack.borrow().len() - 1);
-                    *stack.borrow_mut().last_mut().unwrap() = Value::instance(class);
+                    let instance_ptr = self.objects.borrow_mut().push(Instance::new(class));
+                    *stack.borrow_mut().last_mut().unwrap() = Value::Instance(instance_ptr);
                 } else {
                     return Err(self.err(
                         format!("Expected closure or class, got {}", value.stringify()), *line));

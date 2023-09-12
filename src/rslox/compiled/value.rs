@@ -29,7 +29,7 @@ pub enum Value {
     String(InternedString),
     Closure(Closure),
     Class(Weak<Class>),
-    Instance(Instance),
+    Instance(Pointer<Instance>),
     UpvaluePtr(Pointer<PointedUpvalue>),
 }
 
@@ -51,12 +51,21 @@ impl Debug for Closure {
 pub struct Instance(Weak<Class>, RcRc<HashMap<InternedString, Value>>);
 
 impl Instance {
-   pub fn mark(&self) {
-       for (k, v) in self.1.borrow().deref().into_iter() {
-           k.mark();
-           v.mark();
-       }
-   }
+    pub fn new(class: Weak<Class>) -> Self { Instance(class, rcrc(HashMap::new())) }
+
+    pub fn mark(&self) {
+        for (k, v) in self.1.borrow().deref().into_iter() {
+            k.mark();
+            v.mark();
+        }
+    }
+
+    pub fn name(&self) -> InternedString { self.0.upgrade().unwrap().name.clone() }
+
+    pub fn get(&self, name: InternedString) -> Option<Value> { self.1.borrow().get(&name).cloned() }
+    pub fn set(&self, name: InternedString, value: Value) {
+        self.1.borrow_mut().insert(name, value);
+    }
 }
 
 impl Debug for Instance {
@@ -75,10 +84,6 @@ impl Pointer<PointedUpvalue> {
 impl Value {
     pub fn closure(function: Weak<Function>, upvalues: Upvalues) -> Self {
         Value::Closure(Closure(function, upvalues))
-    }
-
-    pub fn instance(class: Weak<Class>) -> Self {
-        Value::Instance(Instance(class, rcrc(HashMap::new())))
     }
 
     pub fn try_into_closure(&self) -> Result<(Weak<Function>, Upvalues), String> { self.try_into() }
@@ -109,7 +114,7 @@ impl Value {
             Value::Class(c) => c.upgrade().unwrap().stringify(),
             Value::Closure(Closure(f, _)) => f.upgrade().unwrap().stringify(),
             Value::Instance(instance) =>
-                format_interned!("{} instance", instance.0.upgrade().unwrap().name),
+                format_interned!("{} instance", instance.apply(|i| i.name())),
             Value::UpvaluePtr(value) => value.deep_apply(|e| e.stringify()),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
         }
@@ -143,7 +148,10 @@ impl Value {
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
             Value::String(s) => s.mark(),
             Value::Class(c) => c.upgrade().unwrap().name.mark(),
-            Value::Instance(i) => i.mark(),
+            Value::Instance(i_ptr) => {
+                i_ptr.mark();
+                i_ptr.apply(|i| i.mark());
+            }
             Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
             Value::UpvaluePtr(p) => p.mark(),
         }
@@ -198,12 +206,12 @@ impl<'a> TryFrom<&'a Value> for Weak<Class> {
     }
 }
 
-impl<'a> TryFrom<&'a Value> for (Weak<Class>, RcRc<HashMap<InternedString, Value>>) {
+impl<'a> TryFrom<&'a Value> for Pointer<Instance> {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
         match &value {
-            Value::Instance(instance) => Ok((instance.0.clone(), instance.1.clone())),
+            Value::Instance(instance) => Ok(instance.clone()),
             Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Instance, but found {:?}", e)),
         }
