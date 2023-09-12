@@ -79,6 +79,8 @@ impl Chunk {
                 OpCode::DefineGlobal(g) => g.mark(),
                 OpCode::GetGlobal(g) => g.mark(),
                 OpCode::SetGlobal(g) => g.mark(),
+                OpCode::GetProperty(n) => n.mark(),
+                OpCode::SetProperty(n) => n.mark(),
                 OpCode::Return | OpCode::Pop | OpCode::PopN(_) | OpCode::Print |
                 OpCode::Function(_, _) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
                 OpCode::Number(_) | OpCode::Bool(_) | OpCode::GetUpvalue(_) | OpCode::SetUpvalue(_) |

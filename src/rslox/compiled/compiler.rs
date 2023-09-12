@@ -10,7 +10,7 @@ use crate::rslox::common::error::{convert_errors, LoxResult, ParserError};
 use crate::rslox::common::lexer::{Token, TokenType};
 use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
-use crate::rslox::compiled::memory::{InternedString, Managed};
+use crate::rslox::compiled::memory::{InternedString, Managed, Pointer};
 use crate::rslox::compiled::op_code::{ArgCount, CodeLocation, OpCode, StackLocation};
 use crate::rslox::compiled::value::{Class, Function};
 
@@ -478,6 +478,7 @@ impl Compiler {
             let next_precedence = Precedence::from(&r#type).next().unwrap();
             let op = match r#type {
                 TokenType::OpenParen => self.argument_list().map(|c| Left(OpCode::Call(c)))?,
+                TokenType::Dot => Left(OpCode::GetProperty(Pointer::null())),
                 TokenType::Minus => Left(OpCode::Subtract),
                 TokenType::Plus => Left(OpCode::Add),
                 TokenType::Slash => Left(OpCode::Divide),
@@ -494,6 +495,22 @@ impl Compiler {
                 Left(OpCode::Call(c)) => {
                     self.consume(TokenType::CloseParen, None)?;
                     self.write(OpCode::Call(c), line);
+                }
+                Left(OpCode::GetProperty(_)) => {
+                    let name = match self.advance().r#type {
+                        TokenType::Identifier(name) => Ok(name),
+                        e => Err(CompilerError {
+                            message: format!("Expected Identifier after dot, got '{:?}'", e),
+                            token: Token { r#type: e, line },
+                        })
+                    }?;
+                    let interned_name = self.intern_string(name);
+                    if can_assign && self.matches(TokenType::Equal).is_some() {
+                        let line = self.compile_expression()?;
+                        self.write(OpCode::SetProperty(interned_name), line);
+                    } else {
+                        self.write(OpCode::GetProperty(interned_name), line);
+                    }
                 }
                 _ => {
                     self.compile_precedence(next_precedence)?;
@@ -738,6 +755,7 @@ impl From<&TokenType> for Precedence {
     fn from(tt: &TokenType) -> Self {
         match tt {
             TokenType::OpenParen => Precedence::Call,
+            TokenType::Dot => Precedence::Call,
             TokenType::Minus => Precedence::Term,
             TokenType::Plus => Precedence::Term,
             TokenType::Slash => Precedence::Factor,
@@ -788,6 +806,8 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
                     .join(","),
             ),
             OpCode::Class(i) => format!("{}", i),
+            OpCode::GetProperty(s) => s.to_owned(),
+            OpCode::SetProperty(s) => s.to_owned(),
             OpCode::DefineGlobal(name) => format_interned!("'{}'", name),
             OpCode::GetGlobal(name) => format_interned!("'{}'", name),
             OpCode::SetGlobal(name) => format_interned!("'{}'", name),
@@ -798,7 +818,7 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
             OpCode::SetLocal(index) => format!("{}", index),
             OpCode::Bool(bool) => format!("{}", bool),
             OpCode::String(s) => format_interned!("'{}'", s),
-            OpCode::Call(arg_count) => format!("'{}'", arg_count),
+            OpCode::Call(arg_count) => format!("{}", arg_count),
             OpCode::Greater | OpCode::Less | OpCode::Add | OpCode::Subtract | OpCode::Multiply |
             OpCode::Pop | OpCode::Print | OpCode::Nil | OpCode::Equals | OpCode::Divide |
             OpCode::Negate | OpCode::Not | OpCode::CloseUpvalue | OpCode::Return =>
@@ -1113,7 +1133,7 @@ areWeHavingItYet();
 00:  1 FUNCTION       0 []
 01:  | DEFINE_GLOBAL  'areWeHavingItYet'
 02:  4 GET_GLOBAL     'areWeHavingItYet'
-03:  | CALL           '0'
+03:  | CALL           0
 04:  | POP
 <fun areWeHavingItYet>
 00:  2 STRING         'Yes we are!'
@@ -1174,7 +1194,7 @@ areWeHavingItYet(x, z);
 06:  7 GET_GLOBAL     'areWeHavingItYet'
 07:  | GET_GLOBAL     'x'
 08:  | GET_GLOBAL     'z'
-09:  | CALL           '2'
+09:  | CALL           2
 10:  | POP
 <fun areWeHavingItYet>
 00:  2 NUMBER         1
@@ -1227,7 +1247,7 @@ print plus(10, 20);
 02:  4 GET_GLOBAL     'plus'
 03:  | NUMBER         10
 04:  | NUMBER         20
-05:  | CALL           '2'
+05:  | CALL           2
 06:  | PRINT
 <fun plus>
 00:  2 GET_LOCAL      0
@@ -1426,6 +1446,59 @@ fun foo(x) {
 <end bazz>
 <end bar>
 <end foo>
+            "#,
+        )
+    }
+
+    #[test]
+    fn invalid_set_expression_fails() {
+        let msg = compile(
+            unsafe_tokenize(vec!["a + b.c = 3;"])).unwrap_err().unwrap_single().get_message();
+        assert_msg_contains!(msg, "Invalid assignment target")
+    }
+
+    #[test]
+    fn basic_get_expression() {
+        assert_bytecode(
+            r#"
+class Foo {}
+foo = Foo();
+y = foo.x;
+            "#,
+            r#"
+00:  1 CLASS          0
+01:  | DEFINE_GLOBAL  'Foo'
+02:  2 GET_GLOBAL     'Foo'
+03:  | CALL           0
+04:  | SET_GLOBAL     'foo'
+05:  | POP
+06:  3 GET_GLOBAL     'foo'
+07:  | GET_PROPERTY   x
+08:  | SET_GLOBAL     'y'
+09:  | POP
+            "#,
+        )
+    }
+
+    #[test]
+    fn basic_set_expression() {
+        assert_bytecode(
+            r#"
+class Foo {}
+foo = Foo();
+foo.x = 3;
+            "#,
+            r#"
+00:  1 CLASS          0
+01:  | DEFINE_GLOBAL  'Foo'
+02:  2 GET_GLOBAL     'Foo'
+03:  | CALL           0
+04:  | SET_GLOBAL     'foo'
+05:  | POP
+06:  3 GET_GLOBAL     'foo'
+07:  | NUMBER         3
+08:  | SET_PROPERTY   x
+09:  | POP
             "#,
         )
     }

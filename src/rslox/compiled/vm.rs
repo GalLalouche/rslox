@@ -14,7 +14,7 @@ use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::memory::{Heap, InternedString, Managed, Pointer};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Class, Function, PointedUpvalue, Upvalues, Value};
+use crate::rslox::compiled::value::{Function, PointedUpvalue, Upvalues, Value};
 
 use super::compiler::InternedStrings;
 
@@ -236,7 +236,7 @@ impl CallFrame {
                             self.capture_upvalue(self.stack_index + *index)
                         } else {
                             let enclosing_func = &self.stack.borrow_mut()[self.stack_index - 1];
-                            let (_, enclosing_upvalues) = enclosing_func.try_into().unwrap();
+                            let enclosing_upvalues = enclosing_func.try_into_closure().unwrap().1;
                             enclosing_upvalues.get(*index)
                         }
                     ).collect();
@@ -250,6 +250,22 @@ impl CallFrame {
                 self.stack.borrow_mut().push(
                     Value::Class(self.function.upgrade().unwrap().chunk.get_class(*i)),
                 )
+            }
+            OpCode::GetProperty(n) => {
+                let (_, fields): (_, RcRc<HashMap<InternedString, Value>>) = self.try_into_err(
+                    &self.stack.borrow_mut().pop().unwrap(), "set_property", *line)?;
+                let got_fields = fields.borrow_mut();
+                let value =
+                    got_fields.get(n).ok_or(
+                        self.err(format_interned!("Undefined property '{}'.", n), *line))?;
+                stack.borrow_mut().push(value.clone());
+            }
+            OpCode::SetProperty(n) => {
+                let value = self.stack.borrow_mut().pop().unwrap();
+                let (_, fields): (_, RcRc<HashMap<InternedString, Value>>) = self.try_into_err(
+                    &self.stack.borrow_mut().pop().unwrap(), "set_property", *line)?;
+                fields.borrow_mut().insert(n.clone(), value.clone());
+                stack.borrow_mut().push(value);
             }
             OpCode::CloseUpvalue => {
                 self.close_upvalues(self.stack_index);
@@ -323,7 +339,7 @@ impl CallFrame {
             OpCode::Call(arg_count) => {
                 let func_index = stack.borrow().len() - arg_count - 1;
                 let value = stack.borrow().get(func_index).cloned().unwrap();
-                if let Ok((function, upvalues)) = (&value).try_into() {
+                if let Ok((function, upvalues)) = value.try_into_closure() {
                     let arity = &function.upgrade().unwrap().arity;
                     if arity != arg_count {
                         return Err(self.err(
@@ -342,13 +358,13 @@ impl CallFrame {
                         self.open_upvalues.clone(),
                         self.closed_upvalues.clone(),
                     )));
-                } else if let Ok(class) = TryInto::<Weak<Class>>::try_into(&value) {
+                } else if let Ok(class) = value.try_into_class() {
                     assert_eq!(*arg_count, 0);
                     assert_eq!(func_index, stack.borrow().len() - 1);
                     *stack.borrow_mut().last_mut().unwrap() = Value::instance(class);
                 } else {
                     return Err(self.err(
-                        format!("Expected closure or class, got {}", value.stringify()), *line))
+                        format!("Expected closure or class, got {}", value.stringify()), *line));
                 }
             }
             OpCode::Add =>
@@ -1450,6 +1466,34 @@ class Foo {}
 print Foo();
            "#,
             "Foo instance",
+        )
+    }
+
+    #[test]
+    fn basic_set_and_get_property() {
+        assert_printed(
+            r#"
+class Foo {}
+foo = Foo();
+foo.x = 3;
+print foo.x;
+           "#,
+            "3",
+        )
+    }
+
+    #[test]
+    fn get_and_set_book_example() {
+        assert_printed(
+            r#"
+class Pair {}
+
+var pair = Pair();
+pair.first = 1;
+pair.second = 2;
+print pair.first + pair.second; // 3.
+           "#,
+            "3",
         )
     }
 }

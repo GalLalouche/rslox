@@ -49,6 +49,7 @@ impl<A: Hash> Hash for Managed<A> {
 pub struct Pointer<A>(Weak<RefCell<(A, bool)>>);
 
 impl<A> Pointer<A> {
+    pub fn null() -> Self { Pointer(Weak::new()) }
     pub fn apply<B, F: FnOnce(&A) -> B>(&self, func: F) -> B {
         func(&self.unwrap_upgrade().borrow().0)
     }

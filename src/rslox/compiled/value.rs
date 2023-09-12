@@ -81,6 +81,9 @@ impl Value {
         Value::Instance(Instance(class, rcrc(HashMap::new())))
     }
 
+    pub fn try_into_closure(&self) -> Result<(Weak<Function>, Upvalues), String> { self.try_into() }
+    pub fn try_into_class(&self) -> Result<Weak<Class>, String> { self.try_into() }
+
     pub fn is_string(&self) -> bool {
         match &self {
             Value::String(..) => true,
@@ -191,6 +194,18 @@ impl<'a> TryFrom<&'a Value> for Weak<Class> {
             Value::Class(class) => Ok(class.clone()),
             Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
             e => Err(format!("Expected Value::Class, but found {:?}", e)),
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a Value> for (Weak<Class>, RcRc<HashMap<InternedString, Value>>) {
+    type Error = String;
+
+    fn try_from(value: &Value) -> Result<Self, Self::Error> {
+        match &value {
+            Value::Instance(instance) => Ok((instance.0.clone(), instance.1.clone())),
+            Value::UpvaluePtr(v) => v.deep_apply(|e| e.try_into()),
+            e => Err(format!("Expected Value::Instance, but found {:?}", e)),
         }
     }
 }
