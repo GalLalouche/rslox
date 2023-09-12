@@ -681,13 +681,13 @@ impl FunctionContext {
     pub fn resolve_local(
         &self, name: &InternedString, line: Line) -> Result<Option<StackLocation>, CompilerError> {
         for (index, local) in self.locals.iter().enumerate() {
-            if local.is_uninitialized() {
-                return Err(CompilerError::new(
-                    format_interned!("Expression uses uninitialized local variable '{}'", name),
-                    Token::new(line, TokenType::identifier(name.to_owned())),
-                ));
-            }
             if name.compare_values(&local.name) {
+                if local.is_uninitialized() {
+                    return Err(CompilerError::new(
+                        format_interned!("Expression uses uninitialized local variable '{}'", name),
+                        Token::new(line, TokenType::identifier(name.to_owned())),
+                    ));
+                }
                 return Ok(Some(index));
             }
         }

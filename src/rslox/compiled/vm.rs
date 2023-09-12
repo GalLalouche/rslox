@@ -711,6 +711,26 @@ print x;
     }
 
     #[test]
+    fn referencing_outer_blocks() {
+        assert_printed(r#"
+var x = 1;
+{
+  var y = x + 1;
+  var z = y + 1;
+  print x;
+  print y;
+  print z;
+  y = x = z = 4;
+  print x;
+  print y;
+  print z;
+}
+        "#,
+                       "123444",
+        )
+    }
+
+    #[test]
     fn chaining_assignment() {
         assert_printed(r#"
 var x = 1;
