@@ -26,14 +26,14 @@ pub enum Value {
     Nil,
     TemporaryPlaceholder,
     String(InternedString),
+    // We can use a Weak reference to the function, since it exists in the bytecode and will never
+    // be collected.
     Closure(Closure),
     UpvaluePtr(Pointer<PointedUpvalue>),
 }
 
 #[derive(Clone)]
-// We can use a Weak reference to the function, since it exists in the bytecode and will never
-// be collected.
-pub struct Closure(Weak<Function>, Pointer<Upvalues>);
+pub struct Closure(Weak<Function>, Upvalues);
 
 impl Debug for Closure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -50,7 +50,7 @@ impl Pointer<PointedUpvalue> {
 }
 
 impl Value {
-    pub fn closure(function: Weak<Function>, upvalues: Pointer<Upvalues>) -> Self {
+    pub fn closure(function: Weak<Function>, upvalues: Upvalues) -> Self {
         Value::Closure(Closure(function, upvalues))
     }
 
@@ -109,10 +109,7 @@ impl Value {
             Value::Nil => (),
             Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
             Value::String(s) => s.mark(),
-            Value::Closure(Closure(_, upvalues)) => {
-                upvalues.mark();
-                upvalues.apply(|u| u.mark());
-            }
+            Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
             Value::UpvaluePtr(p) => p.mark(),
         }
     }
@@ -142,7 +139,7 @@ impl TryFrom<&Value> for f64 {
     }
 }
 
-impl<'a> TryFrom<&'a Value> for (Weak<Function>, Pointer<Upvalues>) {
+impl<'a> TryFrom<&'a Value> for (Weak<Function>, Upvalues) {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {

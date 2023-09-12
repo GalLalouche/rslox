@@ -50,10 +50,9 @@ impl VirtualMachine {
         let script = Rc::new(Function { name: name.ptr(), arity: 0, chunk });
         let stack: RcRc<Vec<Value>> = Default::default();
         let globals: RcRc<HashMap<InternedString, Value>> = Default::default();
-        let upvalues = Pointer::null();
+        let upvalues = Upvalues::new(Vec::new());
         let open_upvalues = rcrc(LinkedList::new());
-        let closed_upvalues: RcRc<Heap<PointedUpvalue>> = Default::default();
-        let upvalues_heap: RcRc<Heap<Upvalues>> = Default::default();
+        let closed_upvalues = rcrc(Heap::default());
         let rc_interned_strings = rcrc(interned_strings);
         let top_frame = CallFrame::new(
             0 as InstructionPointer,
@@ -65,7 +64,6 @@ impl VirtualMachine {
             rc_interned_strings,
             open_upvalues,
             closed_upvalues,
-            upvalues_heap,
         );
         let mut vm = VirtualMachine { frames: NonEmpty::new(top_frame) };
         while vm.unfinished() {
@@ -124,7 +122,6 @@ impl VirtualMachine {
         for local in top_frame.stack.borrow().iter() {
             local.mark();
         }
-        self.frames.iter().skip(1).for_each(|e| e.closure_upvalues.mark());
         top_frame.function.upgrade().unwrap().chunk.mark();
         for (name, value) in top_frame.globals.borrow().iter() {
             name.mark();
@@ -136,7 +133,6 @@ impl VirtualMachine {
         let top_frame = &mut self.frames.head;
         top_frame.interned_strings.borrow_mut().sweep();
         top_frame.closed_upvalues.borrow_mut().sweep();
-        top_frame.upvalues_heap.borrow_mut().sweep();
     }
 }
 
@@ -148,13 +144,10 @@ struct CallFrame {
     interned_strings: RcRc<InternedStrings>,
     function: Weak<Function>,
     stack: RcRc<Vec<Value>>,
-    closure_upvalues: Pointer<Upvalues>,
+    closure_upvalues: Upvalues,
     globals: RcRc<HashMap<InternedString, Value>>,
     open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
     closed_upvalues: RcRc<Heap<PointedUpvalue>>,
-    // I've opted for a different vec for closures and instances, since it's (possibly) more
-    // efficient than having than using dyn with vtable and all that.
-    upvalues_heap: RcRc<Heap<Upvalues>>,
     stack_index: usize,
 }
 
@@ -165,13 +158,12 @@ impl CallFrame {
         ip: InstructionPointer,
         function: Weak<Function>,
         stack_index: StackLocation,
-        upvalues: Pointer<Upvalues>,
+        upvalues: Upvalues,
         stack: RcRc<Vec<Value>>,
         globals: RcRc<HashMap<InternedString, Value>>,
         interned_strings: RcRc<InternedStrings>,
         open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
         closed_upvalues: RcRc<Heap<PointedUpvalue>>,
-        upvalues_heap: RcRc<Heap<Upvalues>>,
     ) -> Self {
         CallFrame {
             ip,
@@ -183,7 +175,6 @@ impl CallFrame {
             stack_index,
             open_upvalues,
             closed_upvalues,
-            upvalues_heap,
         }
     }
     pub fn current_line(&self) -> Line {
@@ -246,12 +237,14 @@ impl CallFrame {
                         } else {
                             let enclosing_func = &self.stack.borrow_mut()[self.stack_index - 1];
                             let (_, enclosing_upvalues) = enclosing_func.try_into().unwrap();
-                            enclosing_upvalues.apply(|e| e.get(*index))
+                            enclosing_upvalues.get(*index)
                         }
                     ).collect();
-                let ptr = self.upvalues_heap.borrow_mut().push(Upvalues::new(upvalue_ptrs));
                 stack.borrow_mut().push(
-                    Value::closure(self.function.upgrade().unwrap().chunk.get_function(*i), ptr));
+                    Value::closure(
+                        self.function.upgrade().unwrap().chunk.get_function(*i),
+                        Upvalues::new(upvalue_ptrs),
+                    ));
             }
             OpCode::CloseUpvalue => {
                 self.close_upvalues(self.stack_index);
@@ -282,12 +275,12 @@ impl CallFrame {
                 globals.borrow_mut().insert(name.clone(), value.clone());
             }
             OpCode::GetUpvalue(index) =>
-                stack.borrow_mut().push(
-                    Value::UpvaluePtr(self.closure_upvalues.apply(|v| v.get(*index).clone()))),
+                stack.borrow_mut().push(Value::UpvaluePtr(self.closure_upvalues.get(*index).clone())),
+
             OpCode::SetUpvalue(index) => {
                 // We don't pop on assignment, to allow for chaining.
                 let value = stack.borrow().last().cloned().unwrap();
-                self.closure_upvalues.mutate(|e| e.set(*index, value));
+                self.closure_upvalues.set(*index, value);
             }
             OpCode::DefineLocal(index) =>
                 (*stack.borrow_mut().get_mut(*index).unwrap()) =
@@ -343,7 +336,6 @@ impl CallFrame {
                     self.interned_strings.clone(),
                     self.open_upvalues.clone(),
                     self.closed_upvalues.clone(),
-                    self.upvalues_heap.clone(),
                 )));
             }
             OpCode::Add =>
