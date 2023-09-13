@@ -798,17 +798,19 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
             OpCode::JumpIfFalse(index) => format!("{}", index),
             OpCode::Jump(index) => format!("{}", index),
             OpCode::Function(i) => {
-                let upvalues = &chunk.get_function(*i).upgrade().unwrap().upvalues;
+                let function = chunk.get_function(*i).upgrade().unwrap();
+                let name = function.name.clone();
+                let upvalues = &function.upvalues;
                 format!(
                     "{} [{}]",
-                    i,
+                    name.to_owned(),
                     upvalues.iter()
                         .map(|e| format!("({},{})", e.index, if e.is_local { "t" } else { "f" }))
                         .collect::<Vec<_>>()
                         .join(","),
                 )
             }
-            OpCode::Class(i) => format!("{}", i),
+            OpCode::Class(i) => chunk.get_class(*i).upgrade().unwrap().name.to_owned(),
             OpCode::GetProperty(s) => s.to_owned(),
             OpCode::SetProperty(s) => s.to_owned(),
             OpCode::DefineGlobal(name) => format_interned!("'{}'", name),
@@ -1082,7 +1084,7 @@ fun areWeHavingItYet() {
 print areWeHavingItYet;
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       areWeHavingItYet []
 01:  | DEFINE_GLOBAL  'areWeHavingItYet'
 02:  4 GET_GLOBAL     'areWeHavingItYet'
 03:  | PRINT
@@ -1107,7 +1109,7 @@ fun areWeHavingItYet() {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       areWeHavingItYet []
 01:  | DEFINE_GLOBAL  'areWeHavingItYet'
 <fun areWeHavingItYet>
 00:  2 NUMBER         1
@@ -1133,7 +1135,7 @@ fun areWeHavingItYet() {
 areWeHavingItYet();
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       areWeHavingItYet []
 01:  | DEFINE_GLOBAL  'areWeHavingItYet'
 02:  4 GET_GLOBAL     'areWeHavingItYet'
 03:  | CALL           0
@@ -1158,7 +1160,7 @@ fun areWeHavingItYet(x, y) {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       areWeHavingItYet []
 01:  | DEFINE_GLOBAL  'areWeHavingItYet'
 <fun areWeHavingItYet>
 00:  2 NUMBER         1
@@ -1188,7 +1190,7 @@ var z = 12;
 areWeHavingItYet(x, z);
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       areWeHavingItYet []
 01:  | DEFINE_GLOBAL  'areWeHavingItYet'
 02:  5 NUMBER         52
 03:  | DEFINE_GLOBAL  'x'
@@ -1223,7 +1225,7 @@ fun foo() {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       foo []
 01:  | DEFINE_GLOBAL  'foo'
 <fun foo>
 00:  2 STRING         'hi'
@@ -1245,7 +1247,7 @@ fun plus(x, y) {
 print plus(10, 20);
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       plus []
 01:  | DEFINE_GLOBAL  'plus'
 02:  4 GET_GLOBAL     'plus'
 03:  | NUMBER         10
@@ -1274,7 +1276,7 @@ fun foo(x) {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       foo []
 01:  | DEFINE_GLOBAL  'foo'
 <fun foo>
 00:  2 GET_LOCAL      0
@@ -1302,10 +1304,10 @@ fun foo(x) {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       foo []
 01:  | DEFINE_GLOBAL  'foo'
 <fun foo>
-00:  2 FUNCTION       0 [(0,t)]
+00:  2 FUNCTION       bar [(0,t)]
 01:  5 GET_LOCAL      1
 02:  | RETURN
 <fun bar>
@@ -1332,14 +1334,14 @@ fun foo(x) {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       foo []
 01:  | DEFINE_GLOBAL  'foo'
 <fun foo>
-00:  2 FUNCTION       0 [(0,t)]
+00:  2 FUNCTION       bar [(0,t)]
 01:  8 GET_LOCAL      1
 02:  | RETURN
 <fun bar>
-00:  3 FUNCTION       0 [(0,f)]
+00:  3 FUNCTION       bazz [(0,f)]
 01:  6 GET_LOCAL      0
 02:  | RETURN
 <fun bazz>
@@ -1371,7 +1373,7 @@ fun foo(x) {
 01:  3 NUMBER         2
 02:  4 NUMBER         3
 03:  5 NUMBER         4
-04:  6 FUNCTION       0 [(1,t),(2,t)]
+04:  6 FUNCTION       foo [(1,t),(2,t)]
 05:  9 POP_N          2
 06:  | CLOSE_UPVALUE
 07:  | CLOSE_UPVALUE
@@ -1400,7 +1402,7 @@ fun foo(x) {
            "#,
             r#"
 00:  2 NUMBER         1
-01:  3 FUNCTION       0 [(0,t)]
+01:  3 FUNCTION       foo [(0,t)]
 02:  6 POP
 03:  | CLOSE_UPVALUE
 <fun foo>
@@ -1429,14 +1431,14 @@ fun foo(x) {
 }
             "#,
             r#"
-00:  1 FUNCTION       0 []
+00:  1 FUNCTION       foo []
 01:  | DEFINE_GLOBAL  'foo'
 <fun foo>
-00:  2 FUNCTION       0 [(0,t)]
+00:  2 FUNCTION       bar [(0,t)]
 01:  8 GET_LOCAL      1
 02:  | RETURN
 <fun bar>
-00:  3 FUNCTION       0 [(0,f),(0,t)]
+00:  3 FUNCTION       bazz [(0,f),(0,t)]
 01:  6 GET_LOCAL      1
 02:  | RETURN
 <fun bazz>
@@ -1469,7 +1471,7 @@ foo = Foo();
 y = foo.x;
             "#,
             r#"
-00:  1 CLASS          0
+00:  1 CLASS          Foo
 01:  | DEFINE_GLOBAL  'Foo'
 02:  2 GET_GLOBAL     'Foo'
 03:  | CALL           0
@@ -1492,7 +1494,7 @@ foo = Foo();
 foo.x = 3;
             "#,
             r#"
-00:  1 CLASS          0
+00:  1 CLASS          Foo
 01:  | DEFINE_GLOBAL  'Foo'
 02:  2 GET_GLOBAL     'Foo'
 03:  | CALL           0
