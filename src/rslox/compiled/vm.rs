@@ -14,7 +14,7 @@ use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::memory::{Heap, InternedString, Managed, Pointer};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, Instance, PointedUpvalue, Upvalues, Value};
+use crate::rslox::compiled::value::{Function, Instance, Mark, PointedUpvalue, Upvalues, Value};
 
 use super::compiler::InternedStrings;
 
@@ -131,10 +131,7 @@ impl VirtualMachine {
             local.mark();
         }
         top_frame.function.upgrade().unwrap().chunk.mark();
-        for (name, value) in top_frame.globals.borrow().iter() {
-            name.mark();
-            value.mark();
-        }
+        top_frame.globals.borrow().mark();
     }
 
     fn sweep(&mut self) {

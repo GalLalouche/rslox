@@ -54,13 +54,6 @@ pub struct Instance(Weak<Class>, RcRc<HashMap<InternedString, Value>>);
 impl Instance {
     pub fn new(class: Weak<Class>) -> Self { Instance(class, rcrc(HashMap::new())) }
 
-    pub fn mark(&self) {
-        for (k, v) in self.1.borrow().deref().into_iter() {
-            k.mark();
-            v.mark();
-        }
-    }
-
     pub fn name(&self) -> InternedString { self.0.upgrade().unwrap().name.clone() }
 
     pub fn get(&self, name: InternedString) -> Option<Value> { self.1.borrow().get(&name).cloned() }
@@ -140,24 +133,6 @@ impl Value {
         }
     }
     pub fn is_upvalue_ptr(&self) -> bool { matches!(self, Value::UpvaluePtr(..)) }
-
-    pub fn mark(&self) {
-        match self {
-            Value::Number(_) => (),
-            Value::Bool(_) => (),
-            Value::Nil => (),
-            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
-            Value::String(s) => { s.mark(); }
-            Value::Class(c) => { c.upgrade().unwrap().name.mark(); }
-            Value::Instance(i_ptr) => {
-                if i_ptr.mark() {
-                    i_ptr.apply(|i| i.mark());
-                }
-            }
-            Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
-            Value::UpvaluePtr(p) => { p.mark(); }
-        }
-    }
 }
 
 impl PartialEq<Self> for Value {
@@ -394,8 +369,47 @@ impl Upvalues {
     pub fn set(&mut self, index: StackLocation, value: Value) {
         self.upvalues.borrow_mut()[index].deep_set(value)
     }
+}
 
-    pub fn mark(&self) {
+pub trait Mark {
+    fn mark(&self);
+}
+
+impl Mark for Value {
+    fn mark(&self) {
+        match self {
+            Value::Number(_) => (),
+            Value::Bool(_) => (),
+            Value::Nil => (),
+            Value::TemporaryPlaceholder => panic!("TemporaryPlaceholder found!"),
+            Value::String(s) => { s.mark(); }
+            Value::Class(c) => { c.upgrade().unwrap().name.mark(); }
+            Value::Instance(i_ptr) => {
+                if i_ptr.mark() {
+                    i_ptr.apply(|i| i.mark());
+                }
+            }
+            Value::Closure(Closure(_, upvalues)) => upvalues.mark(),
+            Value::UpvaluePtr(p) => { p.mark(); }
+        }
+    }
+}
+
+impl<V: Mark> Mark for HashMap<InternedString, V> {
+    fn mark(&self) {
+        for (k, v) in self.into_iter() {
+            k.mark();
+            v.mark();
+        }
+    }
+}
+
+impl Mark for Instance {
+    fn mark(&self) { self.1.borrow().deref().mark() }
+}
+
+impl Mark for Upvalues {
+    fn mark(&self) {
         // We only need to mark closed upvalues, since open upvalues will never be collected.
         self.upvalues.borrow_mut().iter_mut().for_each(|p| if p.apply(|upv| upv.is_closed()) {
             p.mark();
