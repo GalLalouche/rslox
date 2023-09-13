@@ -339,8 +339,8 @@ impl Compiler {
         let end_line = self.multi_statements()?;
         let (chunk, upvalues) = self.frames.pop().unwrap().finish(end_line);
         self.depth -= 1;
-        let function = Function { name: name.clone(), arity, chunk };
-        self.active_chunk_mut().add_function(function, line, upvalues.into_iter().collect());
+        let function = Function { name: name.clone(), arity, chunk, upvalues };
+        self.active_chunk_mut().add_function(function, line);
         self.define_variable(name, line)?;
         Ok(end_line)
     }
@@ -797,14 +797,17 @@ pub fn disassemble(chunk: &Chunk) -> Vec<String> {
                 panic!("Jump should have been patched at line: '{}'", line),
             OpCode::JumpIfFalse(index) => format!("{}", index),
             OpCode::Jump(index) => format!("{}", index),
-            OpCode::Function(i, upvalues) => format!(
-                "{} [{}]",
-                i,
-                upvalues.iter()
-                    .map(|e| format!("({},{})", e.index, if e.is_local { "t" } else { "f" }))
-                    .collect::<Vec<_>>()
-                    .join(","),
-            ),
+            OpCode::Function(i) => {
+                let upvalues = &chunk.get_function(*i).upgrade().unwrap().upvalues;
+                format!(
+                    "{} [{}]",
+                    i,
+                    upvalues.iter()
+                        .map(|e| format!("({},{})", e.index, if e.is_local { "t" } else { "f" }))
+                        .collect::<Vec<_>>()
+                        .join(","),
+                )
+            }
             OpCode::Class(i) => format!("{}", i),
             OpCode::GetProperty(s) => s.to_owned(),
             OpCode::SetProperty(s) => s.to_owned(),

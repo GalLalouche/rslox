@@ -53,7 +53,7 @@ impl VirtualMachine {
         chunk: Chunk, interned_strings: InternedStrings, writer: &mut impl Write, f: F,
     ) -> Result<A, VmError> {
         let name = Managed::new("<script>".to_owned());
-        let script = Rc::new(Function { name: name.ptr(), arity: 0, chunk });
+        let script = Rc::new(Function { name: name.ptr(), arity: 0, chunk, upvalues: Vec::new() });
         let stack: RcRc<Vec<Value>> = Default::default();
         let globals: RcRc<HashMap<InternedString, Value>> = Default::default();
         let upvalues = Upvalues::new(Vec::new());
@@ -238,7 +238,9 @@ impl CallFrame {
                 write!(writer, "{}", expr.stringify()).expect("Not written");
             }
             OpCode::Number(num) => stack.borrow_mut().push(Value::Number(*num)),
-            OpCode::Function(i, upvalues) => {
+            OpCode::Function(i) => {
+                let function_chunk = &self.function.upgrade().unwrap().chunk;
+                let upvalues = &function_chunk.get_function(*i).upgrade().unwrap().upvalues;
                 let upvalue_ptrs: Vec<Pointer<PointedUpvalue>> =
                     upvalues.into_iter().map(|Upvalue { index, is_local }|
                         if *is_local {
@@ -251,7 +253,7 @@ impl CallFrame {
                     ).collect();
                 stack.borrow_mut().push(
                     Value::closure(
-                        self.function.upgrade().unwrap().chunk.get_function(*i),
+                        function_chunk.get_function(*i),
                         Upvalues::new(upvalue_ptrs),
                     ));
             }

@@ -6,7 +6,7 @@ use std::rc::Weak;
 
 use crate::format_interned;
 use crate::rslox::common::utils::{RcRc, rcrc, WeakRc};
-use crate::rslox::compiled::chunk::Chunk;
+use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::memory::{InternedString, Pointer};
 use crate::rslox::compiled::op_code::StackLocation;
 use crate::rslox::compiled::tests::DeepEq;
@@ -44,6 +44,12 @@ impl Debug for Closure {
         f.debug_struct("Class")
             .field("function_name", &self.0.upgrade().unwrap().name.to_owned())
             .finish()
+    }
+}
+
+impl PartialEq for Closure {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0) && self.1 == other.1
     }
 }
 
@@ -303,6 +309,7 @@ pub struct Function {
     pub name: InternedString,
     pub arity: usize,
     pub chunk: Chunk,
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl Function {
@@ -317,7 +324,7 @@ impl DeepEq for Function {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct Class {
     pub name: InternedString,
 }
@@ -333,6 +340,9 @@ impl DeepEq for Class {
 }
 
 
+/// Includes the actual runtime values of the closed over values, unlike the upvalues field in
+/// [Function], which contains the recipe to compute those.
+///
 /// Since closures, i.e., function values, follow reference semantics (i.e., one can assign the same
 /// closure to multiple values), this clone is also shallow. Of course, closures also share data,
 /// so this is mandatory:
@@ -350,7 +360,7 @@ impl DeepEq for Class {
 /// g();
 /// ```
 /// In the above example, both f and g refer to the same underlying x, and so both modify it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Upvalues {
     upvalues: RcRc<Vec<Pointer<PointedUpvalue>>>,
 }

@@ -1,4 +1,3 @@
-use crate::rslox::compiled::chunk::Upvalue;
 use crate::rslox::compiled::memory::InternedString;
 use crate::rslox::compiled::tests::DeepEq;
 
@@ -15,7 +14,7 @@ pub enum OpCode {
     // A more efficient variant of the above, used by function returns and block ends.
     PopN(usize),
     Print,
-    Function(ConstantIndex, Vec<Upvalue>),
+    Function(ConstantIndex),
     Class(ConstantIndex),
     GetProperty(InternedString),
     SetProperty(InternedString),

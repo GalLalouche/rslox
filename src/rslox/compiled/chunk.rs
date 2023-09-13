@@ -48,10 +48,9 @@ impl Chunk {
     pub fn swap_last_two_instructions(&mut self) -> () {
         self.code.swap_last_two_instructions();
     }
-    pub fn add_function(
-        &mut self, function: Function, line: Line, upvalues: Vec<Upvalue>) -> CodeLocation {
+    pub fn add_function(&mut self, function: Function, line: Line) -> CodeLocation {
         let index = self.functions.len();
-        let result = self.write(OpCode::Function(index, upvalues), line);
+        let result = self.write(OpCode::Function(index), line);
         self.functions.push(Rc::new(function));
         result
     }
@@ -82,7 +81,7 @@ impl Chunk {
                 OpCode::GetProperty(n) => { n.mark(); }
                 OpCode::SetProperty(n) => { n.mark(); }
                 OpCode::Return | OpCode::Pop | OpCode::PopN(_) | OpCode::Print |
-                OpCode::Function(_, _) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
+                OpCode::Function(..) | OpCode::CloseUpvalue | OpCode::DefineLocal(_) |
                 OpCode::Number(_) | OpCode::Bool(_) | OpCode::GetUpvalue(_) | OpCode::SetUpvalue(_) |
                 OpCode::GetLocal(_) | OpCode::SetLocal(_) | OpCode::Nil | OpCode::Call(_) |
                 OpCode::Add | OpCode::Subtract | OpCode::Multiply | OpCode::Divide | OpCode::Negate |
