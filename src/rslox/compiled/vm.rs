@@ -14,7 +14,7 @@ use crate::rslox::compiled::chunk::{Chunk, Upvalue};
 use crate::rslox::compiled::code::Line;
 use crate::rslox::compiled::memory::{Heap, InternedString, Managed, Pointer};
 use crate::rslox::compiled::op_code::{OpCode, StackLocation};
-use crate::rslox::compiled::value::{Function, Instance, Mark, PointedUpvalue, Upvalues, Value};
+use crate::rslox::compiled::value::{ClosedOverValues, Function, Instance, Mark, PointedUpvalue, Value};
 
 use super::compiler::InternedStrings;
 
@@ -56,7 +56,7 @@ impl VirtualMachine {
         let script = Rc::new(Function { name: name.ptr(), arity: 0, chunk, upvalues: Vec::new() });
         let stack: RcRc<Vec<Value>> = Default::default();
         let globals: RcRc<HashMap<InternedString, Value>> = Default::default();
-        let upvalues = Upvalues::new(Vec::new());
+        let upvalues = ClosedOverValues::new(Vec::new());
         let open_upvalues = rcrc(LinkedList::new());
         let closed_upvalues = rcrc(Heap::default());
         let rc_interned_strings = rcrc(interned_strings);
@@ -150,7 +150,7 @@ struct CallFrame {
     interned_strings: RcRc<InternedStrings>,
     function: Weak<Function>,
     stack: RcRc<Vec<Value>>,
-    closure_upvalues: Upvalues,
+    closure_upvalues: ClosedOverValues,
     globals: RcRc<HashMap<InternedString, Value>>,
     open_upvalues: RcRc<LinkedList<Managed<PointedUpvalue>>>,
     closed_upvalues: RcRc<Heap<PointedUpvalue>>,
@@ -165,7 +165,7 @@ impl CallFrame {
         ip: InstructionPointer,
         function: Weak<Function>,
         stack_index: StackLocation,
-        upvalues: Upvalues,
+        upvalues: ClosedOverValues,
         stack: RcRc<Vec<Value>>,
         globals: RcRc<HashMap<InternedString, Value>>,
         interned_strings: RcRc<InternedStrings>,
@@ -254,7 +254,7 @@ impl CallFrame {
                 stack.borrow_mut().push(
                     Value::closure(
                         function_chunk.get_function(*i),
-                        Upvalues::new(upvalue_ptrs),
+                        ClosedOverValues::new(upvalue_ptrs),
                     ));
             }
             OpCode::Class(i) => {

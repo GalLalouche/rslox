@@ -37,7 +37,7 @@ pub enum Value {
 #[derive(Clone)]
 // We can use a Weak reference to the function, since it exists in the bytecode and will never
 // be collected.
-pub struct Closure(Weak<Function>, Upvalues);
+pub struct Closure(Weak<Function>, ClosedOverValues);
 
 impl Debug for Closure {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -82,11 +82,11 @@ impl Pointer<PointedUpvalue> {
 }
 
 impl Value {
-    pub fn closure(function: Weak<Function>, upvalues: Upvalues) -> Self {
+    pub fn closure(function: Weak<Function>, upvalues: ClosedOverValues) -> Self {
         Value::Closure(Closure(function, upvalues))
     }
 
-    pub fn try_into_closure(&self) -> Result<(Weak<Function>, Upvalues), String> { self.try_into() }
+    pub fn try_into_closure(&self) -> Result<(Weak<Function>, ClosedOverValues), String> { self.try_into() }
     pub fn try_into_class(&self) -> Result<Weak<Class>, String> { self.try_into() }
 
     pub fn is_string(&self) -> bool {
@@ -165,7 +165,7 @@ impl TryFrom<&Value> for f64 {
     }
 }
 
-impl<'a> TryFrom<&'a Value> for (Weak<Function>, Upvalues) {
+impl<'a> TryFrom<&'a Value> for (Weak<Function>, ClosedOverValues) {
     type Error = String;
 
     fn try_from(value: &Value) -> Result<Self, Self::Error> {
@@ -361,13 +361,13 @@ impl DeepEq for Class {
 /// ```
 /// In the above example, both f and g refer to the same underlying x, and so both modify it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Upvalues {
+pub struct ClosedOverValues {
     upvalues: RcRc<Vec<Pointer<PointedUpvalue>>>,
 }
 
-impl Upvalues {
+impl ClosedOverValues {
     pub fn new(upvalues: Vec<Pointer<PointedUpvalue>>) -> Self {
-        Upvalues { upvalues: rcrc(upvalues) }
+        ClosedOverValues { upvalues: rcrc(upvalues) }
     }
 
     pub fn get(&self, index: StackLocation) -> Pointer<PointedUpvalue> {
@@ -418,7 +418,7 @@ impl Mark for Instance {
     fn mark(&self) { self.1.borrow().deref().mark() }
 }
 
-impl Mark for Upvalues {
+impl Mark for ClosedOverValues {
     fn mark(&self) {
         // We only need to mark closed upvalues, since open upvalues will never be collected.
         self.upvalues.borrow_mut().iter_mut().for_each(|p| if p.apply(|upv| upv.is_closed()) {
